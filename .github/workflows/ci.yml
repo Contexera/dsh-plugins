@@ -1,0 +1,50 @@
+# CI gate for every package in the monorepo, on clean Linux and Windows runners.
+#
+# Self-contained on purpose. Every package depends on PUBLISHED @deepseek-ai
+# packages, so a clean checkout has nothing to clone and no sibling directory to
+# resolve. The windows lane is the regression fence for path, identifier and
+# file-name handling on a real Windows filesystem.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+    # Docs-only pushes skip the gate: Markdown never reaches code.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# Least privilege: the jobs only read this repository.
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm -r build
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm -r build

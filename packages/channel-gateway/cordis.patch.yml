@@ -1,0 +1,14 @@
+# Installing this bundle inserts the gateway service row. Channel adapters are
+# opt-in rows, because each needs its own credentials and each decides whether
+# its transport runs at all. A profile adds them like this:
+#
+#   - insert:
+#       - id: channel-telegram
+#         name: '@wowyuarm/dsh-channel-gateway/telegram'
+#         config: { token: '<bot token>' }
+#       - id: channel-weixin
+#         name: '@wowyuarm/dsh-channel-gateway/weixin'
+#         config: { token: '<ilink bot token>' }
+- insert:
+    - id: channel-gateway
+      name: '@wowyuarm/dsh-channel-gateway'

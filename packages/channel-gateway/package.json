@@ -1,0 +1,71 @@
+{
+  "name": "@wowyuarm/dsh-channel-gateway",
+  "version": "0.1.3",
+  "description": "Channel gateway for DeepSeek Harness: normalize provider traffic into one message contract, announce inbound messages as one typed event, authorize at the transport boundary.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wowyuarm/dsh-channel-gateway.git"
+  },
+  "type": "module",
+  "keywords": [
+    "channel",
+    "gateway",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis"
+  ],
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./telegram": {
+      "types": "./lib/adapters/telegram/index.d.ts",
+      "default": "./lib/adapters/telegram/index.js"
+    },
+    "./weixin": {
+      "types": "./lib/adapters/weixin/index.d.ts",
+      "default": "./lib/adapters/weixin/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run check:boundaries && vitest run",
+    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/schemastery": "3.18.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.8"
+  },
+  "dependencies": {
+    "undici": "^7.29.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
