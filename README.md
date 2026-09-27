@@ -24,10 +24,16 @@ Run a single package with a filter, e.g. `pnpm --filter @wowyuarm/dsh-context-co
 
 ## Releasing
 
-Versioning is independent per package via [changesets](https://github.com/changesets/changesets).
+Each package is versioned and released on its own cadence through
+[changesets](https://github.com/changesets/changesets):
 
 ```bash
 pnpm changeset           # record intended version bumps
 pnpm version-packages    # apply bumps + changelogs
 pnpm release             # build all, then publish changed packages
 ```
+
+Releases are cut by hand and tagged per package with the full package name
+(`@wowyuarm/dsh-<name>@X.Y.Z`) — a bare `vX.Y.Z` cannot name one of two
+packages. [RELEASING.md](RELEASING.md) is the operator runbook: the steps in
+order, and what has to be verified before a version is public.
