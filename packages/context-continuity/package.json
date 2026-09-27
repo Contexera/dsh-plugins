@@ -5,7 +5,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wowyuarm/dsh-context-continuity.git"
+    "url": "https://github.com/wowyuarm/dsh-plugins.git",
+    "directory": "packages/context-continuity"
   },
   "keywords": [
     "context-continuity",
