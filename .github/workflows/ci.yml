@@ -31,6 +31,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Not a per-package script: the DSH peer contract spans packages (declared
+      # line = peer lower bound = the exact version pinned for the tests).
+      - run: pnpm check:peers
       - run: pnpm -r typecheck
       - run: pnpm -r test
       - run: pnpm -r build
@@ -45,6 +48,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm check:peers
       - run: pnpm -r typecheck
       - run: pnpm -r test
       - run: pnpm -r build
