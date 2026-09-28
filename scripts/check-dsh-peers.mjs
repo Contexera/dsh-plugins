@@ -54,7 +54,32 @@ const compareTuples = (left, right) => left[0] - right[0] || left[1] - right[1] 
 // pnpm-workspace.yaml is the single source of the package list. Only the
 // `dir/*` glob shape is expanded, so a new pattern fails loudly here instead of
 // silently dropping packages out of the contract.
-const patterns = [...read('pnpm-workspace.yaml').matchAll(/^\s*-\s*(\S+)\s*$/gmu)].map(match => match[1])
+//
+// Read only the `packages:` block. The rest of this file is pnpm's own
+// configuration and it also carries list entries — `minimumReleaseAgeExclude`
+// rows are package specs, not workspace patterns — so a whole-file scrape would
+// feed them to the pattern check and red the gate for a reason that has nothing
+// to do with the DSH contract.
+const readWorkspacePatterns = source => {
+  const lines = source.split('\n')
+  const start = lines.findIndex(line => /^packages:\s*$/u.test(line))
+  if (start === -1) return { patterns: [], unreadable: [] }
+  const patterns = []
+  const unreadable = []
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/u.test(line)) break // the next top-level key ends the block
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    const match = /^\s+-\s+(\S+)\s*$/u.exec(line)
+    if (match === null) unreadable.push(line.trim())
+    else patterns.push(match[1])
+  }
+  return { patterns, unreadable }
+}
+const workspace = readWorkspacePatterns(read('pnpm-workspace.yaml'))
+const patterns = workspace.patterns
+for (const line of workspace.unreadable) {
+  failures.push(`pnpm-workspace.yaml: "${line}" in the packages: block is not a "- <pattern>" entry, so the package list stops being readable`)
+}
 if (patterns.length === 0) failures.push('pnpm-workspace.yaml: no package pattern found')
 const packageDirs = []
 for (const pattern of patterns) {
