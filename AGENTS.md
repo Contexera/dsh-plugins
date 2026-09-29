@@ -25,6 +25,7 @@ tsconfig.base.json    Shared compilerOptions; every package tsconfig extends it
 packages/
   channel-gateway/      @wowyuarm/dsh-channel-gateway
   context-continuity/   @wowyuarm/dsh-context-continuity (see its AGENTS.md)
+  jev/                  @wowyuarm/dsh-jev
 ```
 
 Each package is self-contained: its own `package.json`, `tsconfig.json`

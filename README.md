@@ -10,6 +10,7 @@ independently; the repo only unifies tooling, dependency management, and release
 | --- | --- |
 | [`packages/channel-gateway`](packages/channel-gateway) | [`@wowyuarm/dsh-channel-gateway`](https://www.npmjs.com/package/@wowyuarm/dsh-channel-gateway) |
 | [`packages/context-continuity`](packages/context-continuity) | [`@wowyuarm/dsh-context-continuity`](https://www.npmjs.com/package/@wowyuarm/dsh-context-continuity) |
+| [`packages/jev`](packages/jev) | [`@wowyuarm/dsh-jev`](https://www.npmjs.com/package/@wowyuarm/dsh-jev) |
 
 ## Development
 

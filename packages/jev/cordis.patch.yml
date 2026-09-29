@@ -1,0 +1,13 @@
+# Installing this bundle inserts the Jev service row. The row carries the whole
+# configuration surface, because the service is the whole package: endpoint,
+# model, timeout and retry bounds.
+#
+# The API key is deliberately absent. Put it in the environment and name that
+# variable here, so no secret enters a configuration file:
+#
+#   - id: jev
+#     config:
+#       apiKeyEnv: TYPESAFE_API_KEY
+- insert:
+    - id: jev
+      name: '@wowyuarm/dsh-jev'
