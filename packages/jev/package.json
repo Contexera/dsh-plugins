@@ -1,6 +1,6 @@
 {
   "name": "@wowyuarm/dsh-jev",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Jev (TypeSafe System One) as a Cordis service for DeepSeek Harness: one headless decide() call, no tools, no policy.",
   "license": "MIT",
   "repository": {
