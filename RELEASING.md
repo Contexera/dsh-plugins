@@ -93,3 +93,31 @@ against. `pnpm check:peers` keeps the two in step, offline; adding `--upstream`
 prints the published dist-tags next to the declared ranges when the line is up
 for a decision. Moving a line is an ordinary change with a changeset, not a
 release step.
+
+## What a package declares as peers
+
+Declare the narrowest surface that is true, in two classes:
+
+- **`@deepseek-ai/dsh-*` (the harness line).** Only the modules the package's
+  `src/` actually imports, each written `>=<baseline> <next line>`, where the
+  baseline is the oldest version verified — a prerelease counts. Never a caret
+  and never an exact pin: `>=0.2.0-rc.1 <0.2.1` admits every prerelease of the
+  line and the final `0.2.0`, and stops at `0.2.1`; `^0.2.0-rc.1` would admit
+  `0.2.1`, while `>=0.2.0 <0.2.1` would exclude every host still on a
+  prerelease. `pnpm check:peers` enforces the form, the single baseline and the
+  matching exact `devDependencies` pin on both CI lanes.
+- **`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, and other
+  independently-versioned packages.** A caret on the major (`^4.0.1`): their
+  compatibility unit is the major, not the harness line, so `check:peers`
+  deliberately does not police this class. A major bump is a re-certification
+  event like a line move — move it deliberately, never widen it to make an
+  install pass.
+
+A package that imports no `@deepseek-ai/dsh-*` module has no DSH line at all and
+is installable on every harness line: that is the default, not a gap. Never
+declare the umbrella `@deepseek-ai/dsh` as a peer — plugins import sub-packages,
+and the line is already stated exactly by the class above.
+
+Narrow means one line, not one version. Every line move is a downstream install
+boundary and costs a release of its own; a package that must work across lines
+needs runtime probing, not a wider range.
