@@ -252,10 +252,10 @@ const timeline = await readContextTimeline({
 
 ## Seam 6 — tools factory (shipped)
 
-The product surface: one factory produces the three model-facing tools — with
+The product surface: one factory produces the four model-facing tools — with
 fixed names — from your adapter plus optional prose. The engine keeps the
-argument contract, the anti-forgery gate, the `concludeTurn()` timing, and the
-render shapes; you perform every effect.
+argument contract, the anti-forgery gate, the `concludeTurn()` timing, the
+compaction range, and the render shapes; you perform every effect.
 
 ```ts
 import { createContinuityTools } from '@wowyuarm/dsh-context-continuity'
@@ -266,6 +266,14 @@ const tools = createContinuityTools({
   requestRollover: (request, exec) => lifecycle.requestRollover(subjectOf(exec), request),
   recordCheckpoint: ({ name, callId }, exec) => bindings.record(subjectOf(exec), name, callId),
   timeline: ({ limit }, exec) => readTimeline(subjectOf(exec), limit),
+  // The compaction capability of the CALLING agent's own scope, or undefined.
+  // Resolving it is your addressing job: `ctx.get('compaction')` does not see a
+  // service a preset mounted behind `isolate`, so address the preset's service.
+  compactionFor: agent => ({
+    engine: compactionServiceFor(agent),          // { compactRegion(start, end, agent, signal) }
+    meter: tokenMeterFor(agent),                  // optional; { measure(session) }
+    retainTokens: 32 * 1024,                      // optional; this is the default
+  }),
 }, {              // optional; sensible domain-neutral defaults
   subjectNoun: 'Team Member',
   rolloverChecklist: '…what a handoff must cover in your domain…',
@@ -279,7 +287,7 @@ const tools = createContinuityTools({
   topicNoun: 'Thread',
   topicNounPlural: 'Threads',
 })
-// register tools.rollover / tools.checkpoint / tools.timeline
+// register tools.rollover / tools.checkpoint / tools.timeline / tools.compact
 ```
 
 - **The engine decides, you report the fact.** `isRestorableRef` answers whether
@@ -290,7 +298,31 @@ const tools = createContinuityTools({
 - **`concludeTurn()` follows the durable intent, never precedes it.** The rollover
   and checkpoint bodies conclude the turn only after your adapter resolves; a
   rejection leaves the previous generation running and is what the model sees.
-  `context_timeline` is a read: it never concludes a turn.
+  `context_timeline` is a read that never concludes a turn, and neither does
+  `context_compact`: shortening a context keeps working in the turn it was asked
+  from.
+- **An unavailable scope is a result, not a rejection.** `compactionFor` returning
+  `undefined` — or a call that carries no agent at all — answers
+  `status: 'unavailable'` with a reason. That is a supported composition (mount no
+  engine, get no compaction), so the model reads what happened instead of guessing;
+  the tool never silently no-ops.
+- **The engine chooses the range; you never pass one.** `context_compact` takes no
+  arguments. The engine picks the largest older stretch that is safe: it never
+  starts on a leading `system/message`, never reaches the newest `user/message` or
+  anything after it, retreats off any edge that would split a tool call from its
+  result, and prices the recent tail through your `meter` (keeping `retainTokens`,
+  default 32K, verbatim) when you supply one. A scope without a meter still
+  compacts — it just keeps less.
+- **A stale meter costs the budget, nothing else.** A measurement whose nodes no
+  longer match the current surface is ignored, and every structural bound still
+  holds. `measure(session)` is called again after the replacement, so the reported
+  `usageTokens` is the post-compaction reading; a scope with no meter reports no
+  total rather than one it cannot verify.
+- **A failure says whether this context moved.** A rejection from the engine
+  surfaces as `context_compact failed: <message>`, followed by either "This context
+  is unchanged." or — when the durable surface's `replaceGeneration` advanced —
+  "A replacement may already be on this context; read this context again before
+  deciding what to do." The log stays append-only either way.
 - **Validation has two layers.** The declared parameter schema rejects wrong
   types at the tool boundary (`ToolArgsError`); the body owns what a JSON Schema
   cannot express — a non-blank handoff within the 32 KiB cap, at most 32 related
@@ -312,10 +344,14 @@ const tools = createContinuityTools({
   structural contract, the restorable rule, and "Structural only: no transcript
   content" stay engine-owned.
 - **Names are fixed:** `context_rollover`, `context_checkpoint`,
-  `context_timeline`. The prose you override refers to them by name, so only
+  `context_timeline`, `context_compact`. The prose you override refers to them by
+  name, so only
   subject-facing vocabulary is yours: the anti-forgery sentence, "a context change
   never rolls back an external effect", and the jobs/memory discipline are
-  engine-owned and survive any override.
+  engine-owned and survive any override. The compaction description's three
+  non-negotiables are engine-owned for the same reason: it replaces what the
+  subject sees rather than what was recorded, it never switches generation, and it
+  states what happened instead of implying success.
 - **The contract is deliberately generic.** A tool value carries `ref`, `label`,
   and `affectedTopics`, not one host's words for a Thread or a Claim: the same
   factory serves every host. Your render-facing vocabulary belongs in `text`.
@@ -466,9 +502,15 @@ const decision = await pressure.onPreStep(member, signal)   // continue | notice
   successful assistant response re-arms the sequence. The retry budget is
   process-only and per subject.
 - **The notice's substance is the engine's.** The measured numbers, the default
-  action (`context_rollover` by default, renameable), and the instruction to
-  record durable knowledge before switching are not knobs; `PressureNoticeText`
-  replaces only the two labels and the tool name.
+  action, and the instruction to record durable knowledge before switching are not
+  knobs; `PressureNoticeText` replaces only the two labels and the two tool names
+  (`rolloverToolName`, `compactToolName`).
+- **The named default action follows the capability.** When `compactionFor`
+  resolves for the subject, the notice makes `context_compact` the default and
+  keeps `context_rollover` for a genuine page turn — the subject wants this context
+  cleared, or is resuming from an earlier anchor or moving to another session. When
+  it does not resolve, a fresh generation stays the default and no compaction tool
+  is named at all: a subject is never told to call a tool its scope lacks.
 
 ## Compatibility red lines (durable identity)
 

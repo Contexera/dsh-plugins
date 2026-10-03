@@ -208,6 +208,26 @@ describe('the pressure ladder: budget, notice, limit', () => {
     expect(host.reductions).toEqual([])
   })
 
+  it('names the in-place compaction tool as the default when the subject scope has one', async () => {
+    const host = new FakeHost().script('advance')
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    await policyFor(host).onPreStep('subject-1', signal())
+    const text = noticeText(host.steered[0]!)
+    expect(text).toContain('context_compact')
+    expect(text).toContain('which is the default')
+    // Rollover stays the answer for a genuine page turn, and stays named.
+    expect(text).toContain('context_rollover')
+  })
+
+  it('never names a compaction tool to a scope that has none', async () => {
+    const host = new FakeHost()
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    await policyFor(host).onPreStep('subject-1', signal())
+    const text = noticeText(host.steered[0]!)
+    expect(text).not.toContain('context_compact')
+    expect(text).toContain('a fresh context is the default path')
+  })
+
   it('the delivered notice latches the generation, so later steps stay quiet', async () => {
     const host = new FakeHost()
     host.limits = { usageTokens: 200_000, hardLimit: 256_000, handoffAt: 200_000 }
@@ -477,6 +497,35 @@ describe('the notice text', () => {
     expect(text).toContain('context_rollover')
     expect(text).toContain('private memory/notes')
     expect(text.length).toBeLessThan(1200)
+  })
+
+  it('makes the in-place compaction tool the default action, and rollover the page turn', () => {
+    const text = contextPressureNoticeText({
+      usageTokens: 210_000,
+      handoffAt: 200_000,
+      hardLimit: 256_000,
+      inHand: ['claim:a (unify forms)'],
+      jobs: [],
+      canCompact: true,
+    })
+    expect(text).toContain('context_compact')
+    expect(text).toContain('which is the default')
+    expect(text).toContain('context_rollover')
+    expect(text).toContain('cleared, or you are resuming from an earlier anchor or moving to another session')
+    expect(text).toContain('private memory/notes')
+    expect(text.length).toBeLessThan(1200)
+  })
+
+  it('never names a compaction tool a subject does not have', () => {
+    const text = contextPressureNoticeText({
+      usageTokens: 210_000,
+      handoffAt: 200_000,
+      hardLimit: 256_000,
+      inHand: [],
+      jobs: [],
+    })
+    expect(text).not.toContain('context_compact')
+    expect(text).toContain('a fresh context is the default path')
   })
 
   it('says "none" rather than going silent about an empty subject', () => {

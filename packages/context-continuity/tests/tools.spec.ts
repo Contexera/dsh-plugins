@@ -1,12 +1,13 @@
 /**
- * The three continuity tools, as one factory.
+ * The four continuity tools, as one factory.
  *
  * The spec pins the split the factory exists to hold. The engine owns the
  * argument contract a schema cannot express (a non-blank handoff, the byte cap,
  * the related-file shape, a supplied `checkpointRef`), the anti-forgery gate,
- * the `concludeTurn()` timing, and the render shapes. The host owns mechanism
- * and meaning: `ContinuityToolAdapter` performs every effect, and `text`
- * replaces subject-facing wording only — never a safety-bearing sentence.
+ * the `concludeTurn()` timing, the compaction range, and the render shapes. The
+ * host owns mechanism and meaning: `ContinuityToolAdapter` performs every
+ * effect, and `text` replaces subject-facing wording only — never a
+ * safety-bearing sentence.
  *
  * Two layers reject, and the spec pins both. `defineTool`'s own `execute`
  * validates the declared arguments before the body runs (`ToolArgsError`: the
@@ -14,9 +15,13 @@
  * body owns what a JSON Schema cannot express — blankness, the byte cap, the
  * file budget, and the anti-forgery gate. Either way the rejection is what the
  * model sees, the adapter is never touched, and the turn is never concluded.
+ *
+ * Compaction is the one tool whose unavailability is a result rather than a
+ * rejection: a scope that mounts no engine is a supported composition, so the
+ * model reads what happened instead of guessing.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   ToolArgsError,
   validateJsonSchemaValue,
@@ -25,7 +30,8 @@ import {
   type ToolExecutionToken,
   type ToolRunContext,
 } from '@deepseek-ai/dsh-tools'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   MAX_HANDOFF_CHARS,
   MAX_RELATED_FILES,
@@ -36,6 +42,8 @@ import {
   type RolloverToolRequest,
 } from '../src/tools.ts'
 import type { ContextTimeline, ContextTimelineItem } from '../src/timeline.ts'
+import { engineSpy, meterOf, priced } from './compaction-doubles.ts'
+import { agentOn, conversation } from './session-fixture.ts'
 
 /** The engine's own timeline, priced and annotated exactly as `readContextTimeline` returns it. */
 const TIMELINE: ContextTimeline = {
@@ -68,7 +76,7 @@ const TIMELINE: ContextTimeline = {
 }
 
 /** One tool execution: the body reads `callId`, hands `exec` to the adapter, and concludes the turn. */
-function execution(callId = 'call-rollover'): { exec: ToolRunContext; concludeTurn: ReturnType<typeof vi.fn> } {
+function execution(callId = 'call-rollover', agent?: Agent): { exec: ToolRunContext; concludeTurn: ReturnType<typeof vi.fn> } {
   const concludeTurn = vi.fn()
   const exec: ToolRunContext = {
     callId: ToolCallId(callId),
@@ -79,6 +87,7 @@ function execution(callId = 'call-rollover'): { exec: ToolRunContext; concludeTu
     token: Symbol('execution') as unknown as ToolExecutionToken,
     deferContext: () => {},
     concludeTurn,
+    ...(agent === undefined ? {} : { agent }),
   }
   return { exec, concludeTurn }
 }
@@ -90,6 +99,8 @@ interface AdapterSpy {
   readonly rollovers: RolloverToolRequest[]
   readonly checkpoints: CheckpointToolRequest[]
   readonly timelineReads: { readonly limit?: number }[]
+  /** Every agent whose compaction scope the engine asked this host to resolve. */
+  readonly compactionAgents: Agent[]
 }
 
 /** A recording adapter: it answers "yes, restorable" and returns the engine's own timeline. */
@@ -98,6 +109,7 @@ function adapterSpy(overrides: Partial<ContinuityToolAdapter> = {}): AdapterSpy 
   const rollovers: RolloverToolRequest[] = []
   const checkpoints: CheckpointToolRequest[] = []
   const timelineReads: { readonly limit?: number }[] = []
+  const compactionAgents: Agent[] = []
   const adapter: ContinuityToolAdapter = {
     async isRestorableRef(ref) {
       restorableRefs.push(ref)
@@ -115,9 +127,13 @@ function adapterSpy(overrides: Partial<ContinuityToolAdapter> = {}): AdapterSpy 
       timelineReads.push(request)
       return TIMELINE
     },
+    compactionFor(agent) {
+      compactionAgents.push(agent)
+      return undefined
+    },
     ...overrides,
   }
-  return { adapter, restorableRefs, rollovers, checkpoints, timelineReads }
+  return { adapter, restorableRefs, rollovers, checkpoints, timelineReads, compactionAgents }
 }
 
 /** The canonical value one definition returned, typed by what the caller knows it declares. */
@@ -147,11 +163,17 @@ function argumentViolations(definition: ToolDefinition, args: unknown): string[]
 }
 
 describe('createContinuityTools: the declared contract', () => {
-  it('names the three tools the timeline and the rollover prose refer to', () => {
+  it('names the four tools the timeline and the rollover prose refer to', () => {
     const { adapter } = adapterSpy()
     const tools = createContinuityTools(adapter)
-    expect([tools.rollover.name, tools.checkpoint.name, tools.timeline.name])
-      .toEqual(['context_rollover', 'context_checkpoint', 'context_timeline'])
+    expect([tools.rollover.name, tools.checkpoint.name, tools.timeline.name, tools.compact.name])
+      .toEqual(['context_rollover', 'context_checkpoint', 'context_timeline', 'context_compact'])
+  })
+
+  it('declares the compaction tool without arguments, because the range is the engine decision', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(argumentViolations(tools.compact, {})).toEqual([])
+    expect(argumentViolations(tools.compact, { olderThan: 1 })).toEqual([])
   })
 
   it('declares the handoff as required and accepts an undeclared root key', () => {
@@ -446,6 +468,113 @@ describe('context_timeline', () => {
   })
 })
 
+describe('context_compact: a supported composition may have no engine', () => {
+  it('answers "unavailable" without an agent, and never asks the adapter', async () => {
+    const spy = adapterSpy()
+    const tools = createContinuityTools(spy.adapter)
+    const { exec, concludeTurn } = execution()
+    const value = await valueOf<Record<string, unknown>>(tools.compact, {}, exec)
+    expect(value).toEqual({
+      status: 'unavailable',
+      reason: 'this call carries no agent, so it has no context to shorten',
+    })
+    expect(spy.compactionAgents).toEqual([])
+    expect(concludeTurn).not.toHaveBeenCalled()
+    expect(outputViolations(tools.compact, value)).toEqual([])
+  })
+
+  it('answers "unavailable" when the calling agent scope mounts no engine', async () => {
+    const agent = agentOn(conversation({ turns: 4, system: 'You are a test agent.' }))
+    const spy = adapterSpy()
+    const tools = createContinuityTools(spy.adapter)
+    const value = await valueOf<Record<string, unknown>>(tools.compact, {}, execution('call-compact', agent).exec)
+    expect(value).toEqual({
+      status: 'unavailable',
+      reason: 'this agent scope mounts no compaction engine',
+    })
+    expect(spy.compactionAgents).toEqual([agent])
+  })
+
+  it('reports nothing safe to compact as a result, and never calls the engine', async () => {
+    const session = conversation({ turns: 1, system: 'You are a test agent.' })
+    const agent = agentOn(session)
+    const engine = engineSpy()
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const value = await valueOf<Record<string, unknown>>(tools.compact, {}, execution('call-compact', agent).exec)
+    expect(value).toEqual({
+      status: 'nothing',
+      reason: 'this context has nothing older than its newest instruction',
+    })
+    expect(engine.calls).toEqual([])
+    expect(outputViolations(tools.compact, value)).toEqual([])
+  })
+
+  it('hands the engine the span it selected and reports what came back', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const nodes = session.surface.nodes
+    const agent = agentOn(session)
+    const engine = engineSpy({ shadowedTokenCount: 512 })
+    const meter = meterOf(priced(session, 10_000), { totalTokens: 9_000, nodes: [] }).meter
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine, meter }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec, concludeTurn } = execution('call-compact', agent)
+    const value = await valueOf<Record<string, unknown>>(tools.compact, {}, exec)
+    expect(value).toEqual({ status: 'compacted', replaced: 2, replacedTokens: 512, usageTokens: 9_000 })
+    expect(engine.calls).toMatchObject([{ start: nodes[1], end: nodes[4], agent, signal: exec.signal }])
+    // Shortening this context keeps working in this turn: it is not a lifecycle action.
+    expect(concludeTurn).not.toHaveBeenCalled()
+    expect(outputViolations(tools.compact, value)).toEqual([])
+  })
+
+  it('reports a failure that left this context unchanged', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const engine = engineSpy({ fail: 'summarizer unavailable' })
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agentOn(session))
+    await expect(tools.compact.execute({}, exec))
+      .rejects.toThrow('context_compact failed: summarizer unavailable. This context is unchanged.')
+  })
+
+  it('says a replacement may already be on this context when the surface moved before the failure', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const engine = engineSpy({
+      fail: 'the commit was rejected',
+      before: (target, start, end) => {
+        const nodes = target.surface.nodes
+        target.append('user/message', createUserMessage({
+          content: [{ type: 'text', text: 'a summary of the replaced span' }],
+          source: { kind: 'user' },
+        }), {
+          surfaceOp: { op: 'replace', startSeq: start, endSeq: end },
+          sourceEventSeqs: [...nodes.slice(nodes.indexOf(start), nodes.indexOf(end) + 1)],
+        })
+      },
+    })
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agentOn(session))
+    await expect(tools.compact.execute({}, exec)).rejects.toThrow(
+      'context_compact failed: the commit was rejected. A replacement may already be on this context; read this context again before deciding what to do.',
+    )
+    expect(session.surface.replaceGeneration).toBe(1)
+  })
+
+  it('tells the model what was replaced, what it cost, and what the context costs now', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(renderText(tools.compact, { status: 'compacted', replaced: 3, replacedTokens: 1_200, usageTokens: 40_000 }))
+      .toBe('Compacted: replaced 3 earlier messages (about 1200 tokens) with a summary. Recent work kept verbatim; this context is now about 40000 tokens.')
+    // A scope without a meter states what it replaced and nothing it cannot verify.
+    expect(renderText(tools.compact, { status: 'compacted', replaced: 3, replacedTokens: 1_200 }))
+      .toBe('Compacted: replaced 3 earlier messages (about 1200 tokens) with a summary. Recent work kept verbatim.')
+    expect(renderText(tools.compact, { status: 'nothing', reason: 'the recent tail already keeps this whole context verbatim' }))
+      .toBe('Nothing safe to compact: the recent tail already keeps this whole context verbatim. This context is unchanged.')
+    expect(renderText(tools.compact, { status: 'unavailable', reason: 'this agent scope mounts no compaction engine' }))
+      .toBe('Compaction is not available in this scope: this agent scope mounts no compaction engine. This context is unchanged.')
+  })
+})
+
 describe('renders: what the model reads', () => {
   it('names the scheduled mode in the rollover result', async () => {
     const tools = createContinuityTools(adapterSpy().adapter)
@@ -525,6 +654,8 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.checkpoint.description).toContain('A checkpoint never snapshots files, git, jobs, or any external state')
     expect(tools.checkpoint.description).toContain('Checkpoints are private context structure, not shared facts, and are never visible to other subjects.')
     expect(tools.timeline.description).toContain('Structural only: no transcript content.')
+    expect(tools.compact.description).toContain('The log is append-only')
+    expect(tools.compact.description).toContain('It never switches generation and never returns to an anchor')
   })
 
   it('splices host prose into the descriptions it belongs to', () => {
@@ -599,7 +730,7 @@ describe('text: the timeline vocabulary a domain-rich host needs', () => {
   })
 })
 
-describe('createContinuityTools: one factory, three independent tools', () => {
+describe('createContinuityTools: one factory, four independent tools', () => {
   it('builds each tool from the same adapter without sharing mutable state', async () => {
     const spy = adapterSpy()
     const tools: ContinuityTools = createContinuityTools(spy.adapter)
@@ -607,9 +738,13 @@ describe('createContinuityTools: one factory, three independent tools', () => {
     await tools.rollover.execute({ handoff: 'h' }, exec)
     await tools.checkpoint.execute({ name: 'anchor' }, exec)
     await tools.timeline.execute({}, exec)
+    // This execution carries no agent, so the factory answers for itself rather
+    // than reaching through the adapter for anything.
+    expect(await tools.compact.execute({}, exec)).toMatchObject({ status: 'unavailable' })
     expect(spy.rollovers).toHaveLength(1)
     expect(spy.checkpoints).toHaveLength(1)
     expect(spy.timelineReads).toHaveLength(1)
+    expect(spy.compactionAgents).toEqual([])
     expect(exec.concludeTurn).toHaveBeenCalledTimes(2)
   })
 })

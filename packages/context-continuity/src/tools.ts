@@ -1,6 +1,6 @@
 /**
  * The model-facing continuity tools, as one factory: `context_rollover`,
- * `context_checkpoint`, and `context_timeline`.
+ * `context_checkpoint`, `context_timeline`, and `context_compact`.
  *
  * These tools are the product surface, not an accessory: a subject manages its
  * own context through them and nothing else. Two halves, split by what is
@@ -8,14 +8,15 @@
  *
  * - **The engine owns the contract and the safety.** Argument shape (non-blank
  *   handoff, the byte cap, the related-file list, a supplied `checkpointRef`),
- *   the anti-forgery gate, the `concludeTurn()` timing, and the render shapes.
- *   A host customizes prose; it never customizes safety, and a fabricated
- *   `checkpointRef` is a model-visible error rather than a silent fresh
- *   rollover.
+ *   the anti-forgery gate, the `concludeTurn()` timing, the compaction range,
+ *   and the render shapes. A host customizes prose; it never customizes safety,
+ *   and a fabricated `checkpointRef` is a model-visible error rather than a
+ *   silent fresh rollover.
  * - **The host owns mechanism and meaning.** {@link ContinuityToolAdapter}
  *   resolves the calling execution to its subject, asks whether a ref is
- *   restorable, performs the transition, records the checkpoint, and reads the
- *   timeline. {@link ContinuityToolText} is the subject-facing vocabulary.
+ *   restorable, performs the transition, records the checkpoint, reads the
+ *   timeline, and names the compaction capability of the calling agent's scope.
+ *   {@link ContinuityToolText} is the subject-facing vocabulary.
  *
  * The rollover and checkpoint tools are *thin*: they validate, hand the durable
  * intent to the adapter, and let the successful result be the fact. Every
@@ -27,6 +28,8 @@
 
 import { defineTool, type ToolDefinition, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { compactContextRange, type ContextCompactionScope } from './compaction.ts'
 import { brief } from './context-ref.ts'
 import type { ContextTimeline } from './timeline.ts'
 
@@ -35,6 +38,9 @@ export const MAX_HANDOFF_CHARS = 32 * 1024
 
 /** How many related files one handoff may name. */
 export const MAX_RELATED_FILES = 32
+
+/** The in-place compaction tool, named where the pressure notice can cite it. */
+export const CONTEXT_COMPACT_TOOL_NAME = 'context_compact'
 
 /** One related file the handoff asks the next generation to look at first. */
 export interface RelatedFileRequest {
@@ -77,6 +83,16 @@ export interface ContinuityToolAdapter {
   recordCheckpoint(request: CheckpointToolRequest, exec: ToolRunContext): Promise<{ readonly checkpointRef: string; readonly name: string }>
   /** Read the subject's bounded timeline. */
   timeline(request: { readonly limit?: number }, exec: ToolRunContext): Promise<ContextTimeline>
+  /**
+   * The compaction capability in one calling agent's scope, or absent when this
+   * composition mounts no compaction engine for it.
+   *
+   * The engine resolves no service of its own here: which composition supplies a
+   * compaction engine, and behind which service realm, is the host's own
+   * addressing. A returning `undefined` is a supported answer — the tool reports
+   * "not available in this scope", never a failure, and never a silent no-op.
+   */
+  compactionFor(agent: Agent): ContextCompactionScope | undefined
 }
 
 /** Subject-facing wording a host may override; the engine's defaults are domain-neutral. */
@@ -109,11 +125,16 @@ export interface ContinuityToolText {
   readonly topicNounPlural?: string
 }
 
-/** The three tools, ready to register. */
+/**
+ * The tools, ready to register. A host mounts the ones its composition can
+ * serve: the compaction tool answers for itself when its scope has no engine,
+ * while the retrieval tools are a separate factory a host mounts or not.
+ */
 export interface ContinuityTools {
   readonly rollover: ToolDefinition
   readonly checkpoint: ToolDefinition
   readonly timeline: ToolDefinition
+  readonly compact: ToolDefinition
 }
 
 const DEFAULT_TEXT: Required<Omit<ContinuityToolText, 'carriedContext'>> = {
@@ -155,6 +176,38 @@ function checkpointDescription(text: Required<ContinuityToolText>): string {
 function timelineDescription(text: Required<ContinuityToolText>): string {
   const guidance = text.timelineGuidance === '' ? '' : ` ${text.timelineGuidance}`
   return `context_timeline: inspect the bounded structural timeline of this ${text.subjectNoun}'s context lineage: the named checkpoints recorded, the boundaries the host contributed (a fact that entered your context and is worth returning to), and the current head — across the current generation and its archived ancestors.${guidance} Returns approximate retained/discarded token estimates, current usage against the handoff budget, the ${text.topicNounPlural} whose facts entered your context by each anchor, and which anchors are restorable. An anchor is a selectable default exactly when it resolved at a completed turn and is attributable to exactly one ${text.topicNoun}; an anchor that is not selectable states its reason. Structural only: no transcript content. A fresh context_rollover (no checkpointRef) never requires consulting this timeline first — call it directly. Use this tool when you specifically intend a checkpointRef return: to pick the smallest sufficient ref, or to confirm that a fresh handoff is the better path when every anchor is non-restorable.`
+}
+
+/**
+ * What the compaction tool is for, worded the way the model must read it. Three
+ * facts are not negotiable in any host's rewrite: the replacement is of what the
+ * subject sees rather than of what was recorded, it never switches generation,
+ * and the result states what happened instead of implying success.
+ */
+function compactDescription(): string {
+  return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
+}
+
+/**
+ * What the model reads back. The replaced count and price come from the engine's
+ * own accounting, and the measured total is stated only when the scope can
+ * measure one — a number this tool cannot verify is worse than no number.
+ */
+function renderCompaction(value: {
+  readonly status: string
+  readonly replaced?: number | undefined
+  readonly replacedTokens?: number | undefined
+  readonly usageTokens?: number | undefined
+  readonly reason?: string | undefined
+}): string {
+  if (value.status === 'compacted') {
+    const usage = value.usageTokens === undefined ? '' : `; this context is now about ${value.usageTokens} tokens`
+    return `Compacted: replaced ${value.replaced ?? 0} earlier messages (about ${value.replacedTokens ?? 0} tokens) with a summary. Recent work kept verbatim${usage}.`
+  }
+  if (value.status === 'nothing') {
+    return `Nothing safe to compact: ${value.reason ?? 'no reason given'}. This context is unchanged.`
+  }
+  return `Compaction is not available in this scope: ${value.reason ?? 'no reason given'}. This context is unchanged.`
 }
 
 /** One non-blank string the model supplied, or a rejection naming what was wrong. */
@@ -232,7 +285,7 @@ function renderTimeline(value: {
 }
 
 /**
- * Build the three continuity tools for one host.
+ * Build the four continuity tools for one host.
  *
  * The adapter is the host's half: it resolves the calling execution to its
  * subject and performs the effects. `text` only replaces subject-facing
@@ -358,5 +411,54 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     },
   })
 
-  return { rollover, checkpoint, timeline }
+  const compact = defineTool({
+    name: CONTEXT_COMPACT_TOOL_NAME,
+    description: compactDescription(),
+    // No arguments in this version: the subject says "shorten this context", and
+    // how much of it is safe to replace is the engine's own decision.
+    parameters: {},
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: {
+        status: { type: 'string', required: true },
+        replaced: { type: 'number' },
+        replacedTokens: { type: 'number' },
+        usageTokens: { type: 'number' },
+        reason: { type: 'string' },
+      } },
+      render: (_args, value) => [{ type: 'text', text: renderCompaction(value) }],
+    },
+    async execute(_args, exec) {
+      const agent = exec.agent
+      if (agent === undefined) {
+        return { status: 'unavailable', reason: 'this call carries no agent, so it has no context to shorten' }
+      }
+      const scope = adapter.compactionFor(agent)
+      if (scope === undefined) {
+        return { status: 'unavailable', reason: 'this agent scope mounts no compaction engine' }
+      }
+      // The durable surface is the only witness that can tell a failed
+      // transaction from one that already replaced part of its span, so the
+      // failure text claims "unchanged" only where that witness agrees.
+      const generation = agent.session.surface.replaceGeneration
+      let attempt: Awaited<ReturnType<typeof compactContextRange>>
+      try {
+        attempt = await compactContextRange(scope, agent, exec.signal)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        const unchanged = agent.session.surface.replaceGeneration === generation
+        throw new Error(`context_compact failed: ${detail}. ${unchanged
+          ? 'This context is unchanged.'
+          : 'A replacement may already be on this context; read this context again before deciding what to do.'}`)
+      }
+      if (attempt.kind === 'none') return { status: 'nothing', reason: attempt.reason }
+      return {
+        status: 'compacted',
+        replaced: attempt.replaced,
+        replacedTokens: attempt.replacedTokens,
+        ...(attempt.usageTokens === undefined ? {} : { usageTokens: attempt.usageTokens }),
+      }
+    },
+  })
+
+  return { rollover, checkpoint, timeline, compact }
 }

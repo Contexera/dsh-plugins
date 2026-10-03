@@ -20,6 +20,7 @@ const SRC = join(ROOT, 'src')
 const ALLOWED_PACKAGES = new Set([
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-compaction',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-persistence',

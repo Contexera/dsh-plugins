@@ -15,8 +15,9 @@ one — and the agent loses the thread. Whatever it was working on, whatever it 
 figured out, is now on the other side of a wall.
 
 This plugin gives an agent the tools to carry itself across that wall on its own:
-when a Session is getting full, it writes a quick handoff and keeps going in a
-fresh one as the same agent; it can mark a spot to come back to; and — with the
+when a Session is getting full, it shortens that Session in place, or writes a
+quick handoff and keeps going in a fresh one as the same agent; it can mark a spot
+to come back to; and — with the
 optional search tools mounted — it can search back through its earlier Sessions and
 pull out what it said or did. Any agent that runs long enough to fill a Session can
 use it — a
@@ -26,7 +27,7 @@ a long task.
 
 ## What the agent gets
 
-Three tools it can call, plus one automatic safeguard — these ship ready to use, so
+Four tools it can call, plus one automatic safeguard — these ship ready to use, so
 every plugin that adopts this gives its agents the same set:
 
 - **`context_rollover`** — start a fresh Session but stay the same agent, carrying
@@ -34,6 +35,10 @@ every plugin that adopts this gives its agents the same set:
 - **`context_checkpoint`** — mark the current spot so you can come back to it.
 - **`context_timeline`** — look back over your own history and pick a spot that's
   safe to return to.
+- **`context_compact`** — shorten the Session you are in: one older stretch behind
+  you becomes a summary, your recent work stays verbatim, and you keep working
+  here. The log stays append-only, so the summary replaces what the agent sees,
+  not what was recorded.
 - **pressure handling** — a heads-up when a Session is filling up, and a safe
   fallback at the limit, so the agent is never forced to switch at a bad moment.
 

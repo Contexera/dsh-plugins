@@ -1,6 +1,6 @@
 /**
  * The one context-pressure policy: when a subject near its budget is told to
- * prepare a handoff, and what happens at the hard limit.
+ * shorten its context or prepare a handoff, and what happens at the hard limit.
  *
  * Two thresholds, one order, and no host-side re-derivation of either. Below the
  * handoff budget nothing happens. At it, one structured notice is steered into
@@ -30,6 +30,7 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage, type UserMessage } fro
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { producerNoticeSource, v3RenamedSourceKind } from './message-codec.ts'
 import { CONTEXT_ROLLOVER_TOOL_NAME } from './projection.ts'
+import { CONTEXT_COMPACT_TOOL_NAME } from './tools.ts'
 
 /**
  * The `source.summary` of the one-shot pressure notice. Frozen: notices already
@@ -124,6 +125,8 @@ export interface PressureNoticeText {
   readonly jobsLabel?: string
   /** The rollover tool a subject should call, when a host renamed it. */
   readonly rolloverToolName?: string
+  /** The in-place compaction tool named beside it, when a host renamed it. */
+  readonly compactToolName?: string
 }
 
 /** What one pre-step policy call decided. */
@@ -136,6 +139,7 @@ const DEFAULT_TEXT: Required<PressureNoticeText> = {
   inHandLabel: 'Work in hand',
   jobsLabel: 'Background jobs',
   rolloverToolName: CONTEXT_ROLLOVER_TOOL_NAME,
+  compactToolName: CONTEXT_COMPACT_TOOL_NAME,
 }
 
 const CONTINUE: PressureStepDecision = Object.freeze({ kind: 'continue' })
@@ -159,6 +163,14 @@ export function contextPressureNoticeText(
     readonly hardLimit: number
     readonly inHand: readonly string[]
     readonly jobs: readonly string[]
+    /**
+     * Whether this subject's scope can shorten the context it is in. When it
+     * can, the notice's default action is the in-place compaction tool and a
+     * fresh generation is kept for a genuine page turn; when it cannot, a fresh
+     * generation stays the default and the compaction tool is not named at all,
+     * because a model that has no such tool must not be told to call one.
+     */
+    readonly canCompact?: boolean | undefined
   },
   text: PressureNoticeText = {},
 ): string {
@@ -166,13 +178,17 @@ export function contextPressureNoticeText(
     inHandLabel: text.inHandLabel ?? DEFAULT_TEXT.inHandLabel,
     jobsLabel: text.jobsLabel ?? DEFAULT_TEXT.jobsLabel,
     rolloverToolName: text.rolloverToolName ?? DEFAULT_TEXT.rolloverToolName,
+    compactToolName: text.compactToolName ?? DEFAULT_TEXT.compactToolName,
   }
   const inHand = input.inHand.length === 0 ? 'none' : input.inHand.join(', ')
   const jobs = input.jobs.length === 0 ? 'none' : `${input.jobs.length} running (collect or stop them before switching)`
+  const guidance = input.canCompact === true
+    ? `Finish the current atomic action: call ${wording.compactToolName} to shorten this generation in place — your recent work stays verbatim and you keep working here — which is the default. Call ${wording.rolloverToolName} with a handoff only when the work has turned a page: you want this context cleared, or you are resuming from an earlier anchor or moving to another session. Record anything durable in your private memory/notes first.`
+    : `Finish the current atomic action, then call ${wording.rolloverToolName} with a handoff covering your objective, the action in flight, and external side effects and their verification state — write only what a fresh generation could not reconstruct on its own, and a fresh context is the default path. Record anything durable in your private memory/notes first.`
   return [
     `Context pressure: ${input.usageTokens} tokens measured; the handoff budget is ${input.handoffAt} and the hard limit is ${input.hardLimit}.`,
     `${wording.inHandLabel}: ${inHand}. ${wording.jobsLabel}: ${jobs}.`,
-    `Finish the current atomic action, then call ${wording.rolloverToolName} with a handoff covering your objective, the action in flight, and external side effects and their verification state — write only what a fresh generation could not reconstruct on its own, and a fresh context is the default path. Record anything durable in your private memory/notes first.`,
+    guidance,
   ].join(' ')
 }
 
@@ -277,6 +293,9 @@ export class ContextPressurePolicy<SubjectId> {
             hardLimit,
             inHand: inHand.inHand,
             jobs: inHand.jobs,
+            // The same capability the hard limit would force: asking once here
+            // is what keeps the notice from naming a tool this scope lacks.
+            canCompact: this.host.compactionFor(subject) !== undefined,
           }, this.text),
         }],
         source: producerNoticeSource(this.host.pluginId, PRESSURE_NOTICE_SUMMARY),

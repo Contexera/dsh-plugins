@@ -4,7 +4,8 @@
  *
  * A subject rolls forward into a fresh generation (`context_rollover`), returns
  * to a recorded anchor (`context_checkpoint` + rollover), walks its own lineage
- * as one timeline (`context_timeline`), recalls what it has forgotten
+ * as one timeline (`context_timeline`), shortens the generation it is in without
+ * leaving it (`context_compact`), recalls what it has forgotten
  * (`context_search` + `context_read`), and is told to prepare a handoff before
  * its context runs out (the context-pressure policy) — physically many Session
  * files, one continuous context in the subject's understanding. The engine owns
@@ -67,6 +68,7 @@ export type {
 } from './timeline.ts'
 
 export {
+  CONTEXT_COMPACT_TOOL_NAME,
   MAX_HANDOFF_CHARS,
   MAX_RELATED_FILES,
   createContinuityTools,
@@ -79,6 +81,22 @@ export type {
   RelatedFileRequest,
   RolloverToolRequest,
 } from './tools.ts'
+
+export {
+  DEFAULT_COMPACT_RETAIN_TOKENS,
+  compactContextRange,
+  selectCompactionRange,
+} from './compaction.ts'
+export type {
+  CompactionAttempt,
+  CompactionRange,
+  CompactionSelection,
+  ContextCompactionScope,
+  SubjectCompaction,
+  SurfaceMeasurement,
+  SurfaceMeter,
+  SurfaceNodePrice,
+} from './compaction.ts'
 
 export {
   CONTEXT_SEARCH_RESULT_LIMIT,

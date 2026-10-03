@@ -13,21 +13,25 @@
 每个 Session 迟早会写满。它会被压缩，或者 rollover 成一个新的——然后 agent 就断片了。
 它手头在做的事、刚想明白的东西，一下子被挡在了墙的另一边。
 
-这个插件给 agent 几件工具，让它自己翻过这堵墙：Session 快满时，它写一段简短的交接，然后在
-新 Session 里作为同一个 agent 接着干；它可以标记一个位置方便以后回来；挂上可选的检索工具
-之后，它还能回头搜自己早先的 Session，把当时说过、做过的事翻出来。任何跑得够久、会把
+这个插件给 agent 几件工具，让它自己翻过这堵墙：Session 快满时，它可以把当前 Session
+就地压短，也可以写一段简短的交接、然后在新 Session 里作为同一个 agent 接着干；它可以标记
+一个位置方便以后回来；挂上可选的检索工具之后，它还能回头搜自己早先的 Session，把当时说过、
+做过的事翻出来。任何跑得够久、会把
 Session 写满的 agent 都能用——
 [Loom](https://github.com/wowyuarm/Loom) 的 individual、[Agent Team](https://github.com/wowyuarm/dsh-agent-team)
 的 member、跑长任务的 coding agent。
 
 ## agent 能用到什么
 
-三个它能调用的工具，外加一层自动兜底——这些开箱即用，所以每个接入本插件的插件，都给自己
+四个它能调用的工具，外加一层自动兜底——这些开箱即用，所以每个接入本插件的插件，都给自己
 的 agent 提供同一套：
 
 - **`context_rollover`** —— 开一个新 Session，但还是同一个 agent，把你写的交接带进新 Session。
 - **`context_checkpoint`** —— 标记当前位置，方便以后回到这里。
 - **`context_timeline`** —— 回看自己的历史，挑一个能安全返回的位置。
+- **`context_compact`** —— 就地压短当前 Session：身后一段较早的历史换成摘要，最近的工作原样
+  保留，你继续在这里干。日志仍是 append-only：摘要换掉的是 agent 看到的东西，不是记录下来的
+  东西。
 - **压力兜底** —— Session 快满时提前提醒，到上限时给一个安全退路，agent 不会被迫在糟糕的
   时机切换。
 
