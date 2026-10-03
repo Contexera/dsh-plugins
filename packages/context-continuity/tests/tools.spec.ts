@@ -163,11 +163,11 @@ function argumentViolations(definition: ToolDefinition, args: unknown): string[]
 }
 
 describe('createContinuityTools: the declared contract', () => {
-  it('names the four tools the timeline and the rollover prose refer to', () => {
+  it('names the four tools the status and the rollover prose refer to', () => {
     const { adapter } = adapterSpy()
     const tools = createContinuityTools(adapter)
-    expect([tools.rollover.name, tools.checkpoint.name, tools.timeline.name, tools.compact.name])
-      .toEqual(['context_rollover', 'context_checkpoint', 'context_timeline', 'context_compact'])
+    expect([tools.rollover.name, tools.checkpoint.name, tools.status.name, tools.compact.name])
+      .toEqual(['context_rollover', 'context_checkpoint', 'context_status', 'context_compact'])
   })
 
   it('declares the compaction tool without arguments, because the range is the engine decision', () => {
@@ -328,7 +328,7 @@ describe('context_rollover: the anti-forgery gate', () => {
     const tools = createContinuityTools(spy.adapter, { subjectNoun: 'Team Member' })
     const { exec } = execution()
     await expect(tools.rollover.execute({ handoff: 'h', checkpointRef: 'context-checkpoint:forged' }, exec))
-      .rejects.toThrow(/not a restorable anchor this Team Member recorded; cite a ref a context_timeline listed as restorable/)
+      .rejects.toThrow(/not a restorable anchor this Team Member recorded; cite a ref a context_status listed as restorable/)
   })
 
   it('does not consult the gate for a fresh rollover', async () => {
@@ -412,13 +412,29 @@ describe('context_checkpoint', () => {
   })
 })
 
-describe('context_timeline', () => {
+describe('context_status', () => {
+  it('opens at a situation rather than at an intention, and renames itself everywhere it is named', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.status.description).toContain('Call it at a boundary, after a long gap, or when you are unsure where you stand.')
+    // The sentence that made the tool invisible until the model had already
+    // decided to return somewhere.
+    expect(tools.status.description).not.toContain('Use this tool when you specifically intend a checkpointRef return')
+    expect(tools.status.description).toContain('cite a checkpointRef only when this status listed that exact ref as restorable')
+    // One rename, every reference: the other tools' prose points at the tool the
+    // model will actually find.
+    for (const description of [tools.status.description, tools.rollover.description, tools.checkpoint.description]) {
+      expect(description).not.toContain('context_timeline')
+    }
+    expect(JSON.stringify(tools.checkpoint.parameters)).not.toContain('context_timeline')
+    expect(JSON.stringify(tools.rollover.parameters)).not.toContain('context_timeline')
+  })
+
   it('passes a numeric limit through and omits an absent one', async () => {
     const spy = adapterSpy()
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
-    await tools.timeline.execute({ limit: 3 }, exec)
-    await tools.timeline.execute({}, exec)
+    await tools.status.execute({ limit: 3 }, exec)
+    await tools.status.execute({}, exec)
     expect(spy.timelineReads).toEqual([{ limit: 3 }, {}])
   })
 
@@ -426,7 +442,7 @@ describe('context_timeline', () => {
     const spy = adapterSpy()
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
-    await expect(tools.timeline.execute({ limit: '3' }, exec)).rejects.toThrow(ToolArgsError)
+    await expect(tools.status.execute({ limit: '3' }, exec)).rejects.toThrow(ToolArgsError)
     expect(spy.timelineReads).toEqual([])
   })
 
@@ -438,7 +454,7 @@ describe('context_timeline', () => {
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
     const value = await valueOf<{ usageTokens: number; handoffAt: number; items: ContextTimelineItem[]; incompleteFrom?: unknown }>(
-      tools.timeline, {}, exec)
+      tools.status, {}, exec)
     expect(value.usageTokens).toBe(TIMELINE.usageTokens)
     expect(value.handoffAt).toBe(TIMELINE.handoffAt)
     expect(value.items).toEqual(EXPECTED_ITEMS)
@@ -446,23 +462,23 @@ describe('context_timeline', () => {
     expect(value.items[1]?.affectedTopics).not.toBe(EXPECTED_ITEMS[1]?.affectedTopics)
     expect(value.items[1]?.affectedTopics).toEqual(['the rollout Thread'])
     expect(value.incompleteFrom).toEqual(TIMELINE.incompleteFrom)
-    expect(outputViolations(tools.timeline, value)).toEqual([])
+    expect(outputViolations(tools.status, value)).toEqual([])
   })
 
   it('omits incompleteFrom when the lineage was complete', async () => {
     const spy = adapterSpy({ timeline: async () => ({ usageTokens: 10, handoffAt: 20, items: [] }) })
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
-    const value = await valueOf<Record<string, unknown>>(tools.timeline, {}, exec)
+    const value = await valueOf<Record<string, unknown>>(tools.status, {}, exec)
     expect(Object.hasOwn(value, 'incompleteFrom')).toBe(false)
-    expect(outputViolations(tools.timeline, value)).toEqual([])
+    expect(outputViolations(tools.status, value)).toEqual([])
   })
 
   it('is a read: it never concludes the turn', async () => {
     const spy = adapterSpy()
     const tools = createContinuityTools(spy.adapter)
     const { exec, concludeTurn } = execution()
-    await tools.timeline.execute({}, exec)
+    await tools.status.execute({}, exec)
     expect(spy.timelineReads).toHaveLength(1)
     expect(concludeTurn).not.toHaveBeenCalled()
   })
@@ -594,9 +610,10 @@ describe('renders: what the model reads', () => {
   it('spells out every anchor, its price, its topics, and its verdict', async () => {
     const tools = createContinuityTools(adapterSpy().adapter)
     const { exec } = execution()
-    const value = await tools.timeline.execute({}, exec)
-    expect(renderText(tools.timeline, value)).toBe([
-      'Context timeline: 120000 tokens used (handoff at 100000). 2 item(s):',
+    const value = await tools.status.execute({}, exec)
+    expect(renderText(tools.status, value)).toBe([
+      'Context: 120,000 / 100,000 handoff',
+      'Anchors: 2 rows · 1 restorable',
       '- before the extraction [source: checkpoint] (retained ~40000, discarded ~80000; no topics) — restorable — ref: context-checkpoint:alpha',
       '- the rollout Thread arrived [source: boundary — first-arrival] (retained ~90000, discarded ~30000; topics the rollout Thread) — not restorable — multiple topics entered the context by this boundary (anchor: team-boundary:7 — not selectable)',
       'History incomplete: the lineage walk stopped at Session session-lost (the stored log could not be read); ancestors before it could not be read and are not reflected above.',
@@ -607,9 +624,9 @@ describe('renders: what the model reads', () => {
     const spy = adapterSpy({ timeline: async () => ({ usageTokens: 1, handoffAt: 2, items: [] }) })
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
-    const value = await tools.timeline.execute({}, exec)
-    const text = renderText(tools.timeline, value)
-    expect(text).toBe('Context timeline: 1 tokens used (handoff at 2). 0 item(s):')
+    const value = await tools.status.execute({}, exec)
+    const text = renderText(tools.status, value)
+    expect(text).toBe('Context: 1 / 2 handoff\nAnchors: 0 rows · 0 restorable')
     expect(text).not.toContain('History incomplete')
   })
 
@@ -617,17 +634,60 @@ describe('renders: what the model reads', () => {
     const spy = adapterSpy({ timeline: async () => ({ ...TIMELINE, hardLimit: 150_000 }) })
     const tools = createContinuityTools(spy.adapter)
     const { exec } = execution()
-    const value = await tools.timeline.execute({}, exec)
-    expect(renderText(tools.timeline, value).split('\n')[0])
-      .toBe('Context timeline: 120000 tokens used (handoff at 100000, hard limit 150000). 2 item(s):')
-    expect(outputViolations(tools.timeline, value)).toEqual([])
+    const value = await tools.status.execute({}, exec)
+    expect(renderText(tools.status, value).split('\n')[0])
+      .toBe('Context: 120,000 / 100,000 handoff / 150,000 hard limit')
+    expect(outputViolations(tools.status, value)).toEqual([])
+  })
+
+  it('prices the work set when the host supplies a composition, and says it is a heuristic', async () => {
+    const composition = { systemTokens: 8_192, toolsTokens: 11_264, messagesTokens: 131_072 }
+    const spy = adapterSpy({ timeline: async () => ({ ...TIMELINE, composition }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution()
+    const value = await tools.status.execute({}, exec)
+    const text = renderText(tools.status, value)
+    expect(text.split('\n')[1]).toBe('Composition (heuristic): system ~8K · tools ~11K · messages ~131K')
+    expect(outputViolations(tools.status, value)).toEqual([])
+    expect((value as { readonly composition?: unknown }).composition).toEqual(composition)
+  })
+
+  it('says nothing it cannot price: no composition or compaction line without host data', async () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    const { exec } = execution()
+    const value = await tools.status.execute({}, exec)
+    const text = renderText(tools.status, value)
+    expect(text).not.toContain('Composition')
+    expect(text).not.toContain('Compact now')
+    expect(Object.hasOwn(value as object, 'composition')).toBe(false)
+    expect(Object.hasOwn(value as object, 'compactible')).toBe(false)
+    expect(outputViolations(tools.status, value)).toEqual([])
+  })
+
+  it('reports what a compaction started now would replace, and what it keeps verbatim', async () => {
+    const spy = adapterSpy({ timeline: async () => ({ ...TIMELINE, compactible: { compactibleTokens: 118_000, retainedTailTokens: 32_768 } }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution()
+    const value = await tools.status.execute({}, exec)
+    expect(renderText(tools.status, value).split('\n').at(-1))
+      .toBe('Compact now: about 118K compactible; keeps the last ~33K verbatim')
+    expect(outputViolations(tools.status, value)).toEqual([])
+  })
+
+  it('reports a priced context with nothing safe to compact as nothing, not as a broken number', async () => {
+    const spy = adapterSpy({ timeline: async () => ({ ...TIMELINE, compactible: { compactibleTokens: 0, retainedTailTokens: 120_000 } }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution()
+    const value = await tools.status.execute({}, exec)
+    expect(renderText(tools.status, value).split('\n').at(-1))
+      .toBe('Compact now: nothing safe to compact here; the last ~120K stays verbatim')
   })
 
   it('quotes a non-restorable anchor as an identifier that is not a citable ref', async () => {
     const tools = createContinuityTools(adapterSpy().adapter)
     const { exec } = execution()
-    const value = await tools.timeline.execute({}, exec)
-    const row = renderText(tools.timeline, value).split('\n').find(line => line.includes('not restorable')) ?? ''
+    const value = await tools.status.execute({}, exec)
+    const row = renderText(tools.status, value).split('\n').find(line => line.includes('not restorable')) ?? ''
     // The row has to be nameable, and its shape has to keep saying the anchor is
     // not a selection surface: the citable `ref:` form is for restorable rows.
     expect(row).toContain('anchor: team-boundary:7')
@@ -653,7 +713,7 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.rollover.description).toContain('Collect or stop your background jobs before calling')
     expect(tools.checkpoint.description).toContain('A checkpoint never snapshots files, git, jobs, or any external state')
     expect(tools.checkpoint.description).toContain('Checkpoints are private context structure, not shared facts, and are never visible to other subjects.')
-    expect(tools.timeline.description).toContain('Structural only: no transcript content.')
+    expect(tools.status.description).toContain('Structural only: no transcript content.')
     expect(tools.compact.description).toContain('The log is append-only')
     expect(tools.compact.description).toContain('It never switches generation and never returns to an anchor')
   })
@@ -665,7 +725,7 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.checkpoint.description).toContain('Record one before a broad refactor.')
     // The timeline now speaks the host's subject vocabulary too; only the
     // domain glossary (timelineGuidance) and the topic noun are separate knobs.
-    expect(tools.timeline.description).toContain("this Team Member's context lineage")
+    expect(tools.status.description).toContain("this Team Member's context lineage")
   })
 
   it('defaults to a domain-neutral vocabulary', () => {
@@ -707,18 +767,18 @@ describe('text: the timeline vocabulary a domain-rich host needs', () => {
   it('splices host timeline guidance while keeping the structural contract', () => {
     const timelineGuidance = 'Team boundaries render as `Team message`, `Team task claim change`, or `First arrival: <refs>`.'
     const tools = createContinuityTools(adapterSpy().adapter, { timelineGuidance })
-    expect(tools.timeline.description).toContain(timelineGuidance)
-    expect(tools.timeline.description).toContain('Structural only: no transcript content.')
+    expect(tools.status.description).toContain(timelineGuidance)
+    expect(tools.status.description).toContain('Structural only: no transcript content.')
   })
 
   it('names the attributable subject in the host vocabulary, in both the description and the render', async () => {
     const spy = adapterSpy()
     const tools = createContinuityTools(spy.adapter, { topicNoun: 'Thread', topicNounPlural: 'Threads' })
-    expect(tools.timeline.description).toContain('attributable to exactly one Thread')
-    expect(tools.timeline.description).toContain('the Threads whose facts entered your context')
+    expect(tools.status.description).toContain('attributable to exactly one Thread')
+    expect(tools.status.description).toContain('the Threads whose facts entered your context')
     const { exec } = execution()
-    const value = await tools.timeline.execute({}, exec)
-    const text = renderText(tools.timeline, value)
+    const value = await tools.status.execute({}, exec)
+    const text = renderText(tools.status, value)
     expect(text).toContain('no Threads')
     expect(text).toContain('Threads the rollout Thread')
     expect(text).not.toContain('no topics')
@@ -726,7 +786,7 @@ describe('text: the timeline vocabulary a domain-rich host needs', () => {
 
   it('defaults the attributable-subject vocabulary to `topic`', () => {
     const tools = createContinuityTools(adapterSpy().adapter)
-    expect(tools.timeline.description).toContain('attributable to exactly one topic')
+    expect(tools.status.description).toContain('attributable to exactly one topic')
   })
 })
 
@@ -737,7 +797,7 @@ describe('createContinuityTools: one factory, four independent tools', () => {
     const { exec } = execution()
     await tools.rollover.execute({ handoff: 'h' }, exec)
     await tools.checkpoint.execute({ name: 'anchor' }, exec)
-    await tools.timeline.execute({}, exec)
+    await tools.status.execute({}, exec)
     // This execution carries no agent, so the factory answers for itself rather
     // than reaching through the adapter for anything.
     expect(await tools.compact.execute({}, exec)).toMatchObject({ status: 'unavailable' })

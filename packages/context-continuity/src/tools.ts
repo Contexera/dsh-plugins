@@ -1,6 +1,6 @@
 /**
  * The model-facing continuity tools, as one factory: `context_rollover`,
- * `context_checkpoint`, `context_timeline`, and `context_compact`.
+ * `context_checkpoint`, `context_status`, and `context_compact`.
  *
  * These tools are the product surface, not an accessory: a subject manages its
  * own context through them and nothing else. Two halves, split by what is
@@ -31,7 +31,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { compactContextRange, type ContextCompactionScope } from './compaction.ts'
 import { brief } from './context-ref.ts'
-import type { ContextTimeline } from './timeline.ts'
+import type { ContextCompactible, ContextComposition, ContextTimeline } from './timeline.ts'
 
 /** The handoff byte budget; larger handoffs are rejected before they reach the log. */
 export const MAX_HANDOFF_CHARS = 32 * 1024
@@ -41,6 +41,13 @@ export const MAX_RELATED_FILES = 32
 
 /** The in-place compaction tool, named where the pressure notice can cite it. */
 export const CONTEXT_COMPACT_TOOL_NAME = 'context_compact'
+
+/**
+ * The status tool, named where a host's prose can cite it. It is the timeline
+ * read plus the two priced facts a subject needs in order to decide what to do
+ * with its context, so a host that owns the model-facing copy names this one.
+ */
+export const CONTEXT_STATUS_TOOL_NAME = 'context_status'
 
 /** One related file the handoff asks the next generation to look at first. */
 export interface RelatedFileRequest {
@@ -81,7 +88,7 @@ export interface ContinuityToolAdapter {
   requestRollover(request: RolloverToolRequest, exec: ToolRunContext): Promise<{ readonly mode: string }>
   /** Record one checkpoint through the host's binding and running-turn fencing. */
   recordCheckpoint(request: CheckpointToolRequest, exec: ToolRunContext): Promise<{ readonly checkpointRef: string; readonly name: string }>
-  /** Read the subject's bounded timeline. */
+  /** Read the subject's bounded timeline: the anchors, usage and budgets behind `context_status`. */
   timeline(request: { readonly limit?: number }, exec: ToolRunContext): Promise<ContextTimeline>
   /**
    * The compaction capability in one calling agent's scope, or absent when this
@@ -133,7 +140,7 @@ export interface ContinuityToolText {
 export interface ContinuityTools {
   readonly rollover: ToolDefinition
   readonly checkpoint: ToolDefinition
-  readonly timeline: ToolDefinition
+  readonly status: ToolDefinition
   readonly compact: ToolDefinition
 }
 
@@ -166,16 +173,25 @@ function defaultCarriedContext(subjectNoun: string): string {
  * forward.
  */
 function rolloverDescription(text: Required<ContinuityToolText>): string {
-  return `context_rollover: end this context generation and continue as the same ${text.subjectNoun} in a new one. Without checkpointRef the context starts fresh and empty, seeded only by your handoff — the default, cheapest path at context pressure, and the right choice for ordinary generation changes and pressure-driven handoffs. Omit checkpointRef unless you are deliberately returning to a restorable anchor you just selected from a context_timeline result: supply a checkpointRef only when that timeline listed it as restorable and you are citing its exact ref — never synthesize, guess, or reconstruct one; a fabricated ref rejects as a model-visible error. ${text.carriedContext} Write the handoff as the live working state a fresh generation could not reconstruct on its own, as one prose string covering: ${text.rolloverChecklist}. A context change never rolls back any external effect — describe current state so the next generation can re-verify. Record anything worth keeping in your private memory/notes first. Collect or stop your background jobs before calling: a rollover is refused while jobs this ${text.subjectNoun} owns are still running.`
+  return `context_rollover: end this context generation and continue as the same ${text.subjectNoun} in a new one. Without checkpointRef the context starts fresh and empty, seeded only by your handoff — the default, cheapest path at context pressure, and the right choice for ordinary generation changes and pressure-driven handoffs. Omit checkpointRef unless you are deliberately returning to a restorable anchor you just selected from a context_status result: supply a checkpointRef only when that status listed it as restorable and you are citing its exact ref — never synthesize, guess, or reconstruct one; a fabricated ref rejects as a model-visible error. ${text.carriedContext} Write the handoff as the live working state a fresh generation could not reconstruct on its own, as one prose string covering: ${text.rolloverChecklist}. A context change never rolls back any external effect — describe current state so the next generation can re-verify. Record anything worth keeping in your private memory/notes first. Collect or stop your background jobs before calling: a rollover is refused while jobs this ${text.subjectNoun} owns are still running.`
 }
 
 function checkpointDescription(text: Required<ContinuityToolText>): string {
   return `context_checkpoint: record a named checkpoint at the end of the current turn — an opaque, private, restorable anchor for this ${text.subjectNoun}'s context lineage. ${text.checkpointGuidance} The checkpoint resolves only when this turn completes; the host continues work in the next turn automatically. A checkpoint never snapshots files, git, jobs, or any external state: returning to one (via context_rollover with its checkpointRef) resumes the conversation prefix and nothing else. Checkpoints are private context structure, not shared facts, and are never visible to other subjects.`
 }
 
-function timelineDescription(text: Required<ContinuityToolText>): string {
+/**
+ * What the status tool is for, worded the way the model must read it. The
+ * sentence that decides whether the tool is ever used is the one naming when to
+ * call it: a tool the model believes it may only open when it has already
+ * decided to return somewhere stays invisible exactly when a look at the status
+ * would have told it what to do. So the trigger is a situation — a boundary, a
+ * long gap, not knowing where you stand — and not an intention, while the
+ * safety sentences about citing a ref stay with it.
+ */
+function statusDescription(text: Required<ContinuityToolText>): string {
   const guidance = text.timelineGuidance === '' ? '' : ` ${text.timelineGuidance}`
-  return `context_timeline: inspect the bounded structural timeline of this ${text.subjectNoun}'s context lineage: the named checkpoints recorded, the boundaries the host contributed (a fact that entered your context and is worth returning to), and the current head — across the current generation and its archived ancestors.${guidance} Returns approximate retained/discarded token estimates, current usage against the handoff budget, the ${text.topicNounPlural} whose facts entered your context by each anchor, and which anchors are restorable. An anchor is a selectable default exactly when it resolved at a completed turn and is attributable to exactly one ${text.topicNoun}; an anchor that is not selectable states its reason. Structural only: no transcript content. A fresh context_rollover (no checkpointRef) never requires consulting this timeline first — call it directly. Use this tool when you specifically intend a checkpointRef return: to pick the smallest sufficient ref, or to confirm that a fresh handoff is the better path when every anchor is non-restorable.`
+  return `context_status: read where this ${text.subjectNoun}'s context stands before deciding what to do with it — tokens used against the handoff budget and the hard limit, the composition of the work set, how much is compactible now and how much of the recent tail stays verbatim, and the anchors in this ${text.subjectNoun}'s context lineage with which ones are restorable. The anchors are the structural timeline: the named checkpoints recorded, the boundaries the host contributed (a fact that entered your context and is worth returning to), and the current head — across the current generation and its archived ancestors.${guidance} Every row carries approximate retained/discarded token estimates and the ${text.topicNounPlural} whose facts entered your context by that anchor. An anchor is a selectable default exactly when it resolved at a completed turn and is attributable to exactly one ${text.topicNoun}; an anchor that is not selectable states its reason. Call it at a boundary, after a long gap, or when you are unsure where you stand. Structural only: no transcript content. A fresh context_rollover (no checkpointRef) never requires reading this status first — call it directly; cite a checkpointRef only when this status listed that exact ref as restorable.`
 }
 
 /**
@@ -255,21 +271,51 @@ interface TimelineRenderItem {
 }
 
 /**
- * The timeline result, spelled the way the model must read it: a restorable
- * anchor spells out the ref the rollover call has to cite, and a non-restorable
- * one states its reason and quotes its own anchor as an identifier that is
- * explicitly not selectable — a reader has to be able to name the row it is
- * being told it cannot return to.
+ * A token count with thousands separators: the status line is the one place a
+ * subject compares three six-digit numbers, and unseparated digits there are a
+ * reading cost with no upside.
+ */
+function separated(tokens: number): string {
+  return String(Math.round(tokens)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+/**
+ * A token count rounded to thousands, for the lines that are estimates by
+ * nature. Small counts stay exact rather than reading as `~0K`.
+ */
+function approxTokens(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : `${Math.round(tokens)}`
+}
+
+/**
+ * The status result, spelled the way the model must read it: the three budget
+ * numbers first, then the work set's composition and the anchor count, then one
+ * row per anchor — a restorable anchor spells out the ref the rollover call has
+ * to cite, and a non-restorable one states its reason and quotes its own anchor
+ * as an identifier that is explicitly not selectable, because a reader has to be
+ * able to name the row it is being told it cannot return to.
+ *
+ * The two priced blocks are rendered only when the host supplied them: a host
+ * with no meter, or a scope with no compaction engine, says nothing rather than
+ * showing a zero it cannot prove.
  */
 function renderTimeline(value: {
   readonly usageTokens: number
   readonly handoffAt: number
   readonly hardLimit?: number | undefined
+  readonly composition?: ContextComposition | undefined
+  readonly compactible?: ContextCompactible | undefined
   readonly items: readonly TimelineRenderItem[]
   readonly incompleteFrom?: { readonly sessionId: string; readonly reason: string } | undefined
 }, topicNounPlural: string): ContentBlock[] {
-  const budget = value.hardLimit === undefined ? '' : `, hard limit ${value.hardLimit}`
-  const lines = [`Context timeline: ${value.usageTokens} tokens used (handoff at ${value.handoffAt}${budget}). ${value.items.length} item(s):`]
+  const hardLimit = value.hardLimit === undefined ? '' : ` / ${separated(value.hardLimit)} hard limit`
+  const lines = [`Context: ${separated(value.usageTokens)} / ${separated(value.handoffAt)} handoff${hardLimit}`]
+  if (value.composition !== undefined) {
+    const { systemTokens, toolsTokens, messagesTokens } = value.composition
+    lines.push(`Composition (heuristic): system ~${approxTokens(systemTokens)} · tools ~${approxTokens(toolsTokens)} · messages ~${approxTokens(messagesTokens)}`)
+  }
+  const restorable = value.items.filter(item => item.restorable).length
+  lines.push(`Anchors: ${value.items.length} rows · ${restorable} restorable`)
   for (const item of value.items) {
     const topics = item.affectedTopics.length === 0 ? `no ${topicNounPlural}` : `${topicNounPlural} ${item.affectedTopics.join(', ')}`
     const kind = item.kind === undefined ? '' : ` — ${item.kind}`
@@ -280,6 +326,12 @@ function renderTimeline(value: {
   }
   if (value.incompleteFrom !== undefined) {
     lines.push(`History incomplete: the lineage walk stopped at Session ${value.incompleteFrom.sessionId} (${value.incompleteFrom.reason}); ancestors before it could not be read and are not reflected above.`)
+  }
+  if (value.compactible !== undefined) {
+    const { compactibleTokens, retainedTailTokens } = value.compactible
+    lines.push(compactibleTokens > 0
+      ? `Compact now: about ${approxTokens(compactibleTokens)} compactible; keeps the last ~${approxTokens(retainedTailTokens)} verbatim`
+      : `Compact now: nothing safe to compact here; the last ~${approxTokens(retainedTailTokens)} stays verbatim`)
   }
   return [{ type: 'text', text: lines.join('\n') }]
 }
@@ -307,7 +359,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     description: rolloverDescription(wording),
     parameters: {
       handoff: { type: 'string', required: true, description: `Prose handoff for the next context generation — the live working state it could not reconstruct on its own: ${wording.rolloverChecklist}.` },
-      checkpointRef: { type: 'string', description: 'Optional. Omit for the default fresh rollover — ordinary generation changes and pressure-driven handoffs must not supply this. Provide it only to resume from a restorable anchor you just selected in a context_timeline result, citing that exact ref; never synthesize or guess a ref.' },
+      checkpointRef: { type: 'string', description: 'Optional. Omit for the default fresh rollover — ordinary generation changes and pressure-driven handoffs must not supply this. Provide it only to resume from a restorable anchor you just selected in a context_status result, citing that exact ref; never synthesize or guess a ref.' },
       relatedFiles: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, reason: { type: 'string', required: true } } }, description: 'Workspace paths the next generation should look at first, each with one reason.' },
     },
     output: {
@@ -328,7 +380,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
       }
       const checkpointRef = typeof supplied === 'string' ? supplied.trim() : undefined
       if (checkpointRef !== undefined && !await adapter.isRestorableRef(checkpointRef, exec)) {
-        throw new Error(`context_rollover checkpointRef ${checkpointRef} is not a restorable anchor this ${wording.subjectNoun} recorded; cite a ref a context_timeline listed as restorable, or omit checkpointRef for a fresh generation`)
+        throw new Error(`context_rollover checkpointRef ${checkpointRef} is not a restorable anchor this ${wording.subjectNoun} recorded; cite a ref a context_status listed as restorable, or omit checkpointRef for a fresh generation`)
       }
       const outcome = await adapter.requestRollover({
         handoff,
@@ -346,7 +398,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     name: 'context_checkpoint',
     description: checkpointDescription(wording),
     parameters: {
-      name: { type: 'string', required: true, description: 'Short semantic label for this checkpoint, shown in context_timeline.' },
+      name: { type: 'string', required: true, description: 'Short semantic label for this checkpoint, shown in context_status.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { checkpointRef: { type: 'string', required: true }, name: { type: 'string', required: true } } },
@@ -363,9 +415,9 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     },
   })
 
-  const timeline = defineTool({
-    name: 'context_timeline',
-    description: timelineDescription(wording),
+  const status = defineTool({
+    name: CONTEXT_STATUS_TOOL_NAME,
+    description: statusDescription(wording),
     parameters: {
       limit: { type: 'number', description: 'Maximum number of items to return (default 12, at most 24).' },
     },
@@ -374,6 +426,15 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
         usageTokens: { type: 'number', required: true },
         handoffAt: { type: 'number', required: true },
         hardLimit: { type: 'number' },
+        composition: { type: 'object', additionalProperties: false, properties: {
+          systemTokens: { type: 'number', required: true },
+          toolsTokens: { type: 'number', required: true },
+          messagesTokens: { type: 'number', required: true },
+        } },
+        compactible: { type: 'object', additionalProperties: false, properties: {
+          compactibleTokens: { type: 'number', required: true },
+          retainedTailTokens: { type: 'number', required: true },
+        } },
         items: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
           ref: { type: 'string', required: true },
           label: { type: 'string', required: true },
@@ -405,6 +466,8 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
         usageTokens: result.usageTokens,
         handoffAt: result.handoffAt,
         ...(result.hardLimit === undefined ? {} : { hardLimit: result.hardLimit }),
+        ...(result.composition === undefined ? {} : { composition: { ...result.composition } }),
+        ...(result.compactible === undefined ? {} : { compactible: { ...result.compactible } }),
         items: result.items.map(item => ({ ...item, affectedTopics: [...item.affectedTopics] })),
         ...(result.incompleteFrom === undefined ? {} : { incompleteFrom: result.incompleteFrom }),
       }
@@ -460,5 +523,5 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     },
   })
 
-  return { rollover, checkpoint, timeline, compact }
+  return { rollover, checkpoint, status, compact }
 }

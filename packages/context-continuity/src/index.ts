@@ -3,8 +3,8 @@
  * across many physical Session generations.
  *
  * A subject rolls forward into a fresh generation (`context_rollover`), returns
- * to a recorded anchor (`context_checkpoint` + rollover), walks its own lineage
- * as one timeline (`context_timeline`), shortens the generation it is in without
+ * to a recorded anchor (`context_checkpoint` + rollover), reads where its
+ * context stands (`context_status`), shortens the generation it is in without
  * leaving it (`context_compact`), recalls what it has forgotten
  * (`context_search` + `context_read`), and is told to prepare a handoff before
  * its context runs out (the context-pressure policy) — physically many Session
@@ -60,6 +60,8 @@ export {
   readContextTimeline,
 } from './timeline.ts'
 export type {
+  ContextComposition,
+  ContextCompactible,
   ContextTimeline,
   ContextTimelineItem,
   ContextTimelineRequest,
@@ -69,6 +71,7 @@ export type {
 
 export {
   CONTEXT_COMPACT_TOOL_NAME,
+  CONTEXT_STATUS_TOOL_NAME,
   MAX_HANDOFF_CHARS,
   MAX_RELATED_FILES,
   createContinuityTools,
@@ -85,6 +88,7 @@ export type {
 export {
   DEFAULT_COMPACT_RETAIN_TOKENS,
   compactContextRange,
+  compactibleNow,
   selectCompactionRange,
 } from './compaction.ts'
 export type {

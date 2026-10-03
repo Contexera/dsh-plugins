@@ -28,7 +28,8 @@ Session 写满的 agent 都能用——
 
 - **`context_rollover`** —— 开一个新 Session，但还是同一个 agent，把你写的交接带进新 Session。
 - **`context_checkpoint`** —— 标记当前位置，方便以后回到这里。
-- **`context_timeline`** —— 回看自己的历史，挑一个能安全返回的位置。
+- **`context_status`** —— 读当前 context 的状态：用了多少 token、离两个预算还有多远、
+  token 由什么组成、现在能压掉多少，以及哪些早先的位置能安全返回。
 - **`context_compact`** —— 就地压短当前 Session：身后一段较早的历史换成摘要，最近的工作原样
   保留，你继续在这里干。日志仍是 append-only：摘要换掉的是 agent 看到的东西，不是记录下来的
   东西。

@@ -15,6 +15,7 @@ import type { SessionSeq } from '@deepseek-ai/dsh-session'
 import {
   DEFAULT_COMPACT_RETAIN_TOKENS,
   compactContextRange,
+  compactibleNow,
   selectCompactionRange,
   type CompactionSelection,
 } from '../src/compaction.ts'
@@ -137,6 +138,53 @@ describe('selectCompactionRange: when nothing may be compacted', () => {
     const session = conversation({ turns: 1, system: 'You are a test agent.' })
     expect(reasonOf(selectCompactionRange(session, undefined, DEFAULT_COMPACT_RETAIN_TOKENS)))
       .toBe('this context has nothing older than its newest instruction')
+  })
+})
+
+describe('compactibleNow: the price a status read reports', () => {
+  it('prices the span the compaction would take, and the recent tail it keeps', () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const scope = { engine: engineSpy().engine, meter: meterOf(priced(session, 10_000)).meter }
+    // Nine nodes at ten thousand each against the default 32K retention budget:
+    // the walk keeps nodes 5-8 verbatim, so nodes 1-4 are what a compaction
+    // started now would replace. The system head is in neither number.
+    expect(compactibleNow(session, scope)).toEqual({ compactibleTokens: 40_000, retainedTailTokens: 40_000 })
+  })
+
+  it('prices the very span the engine is handed', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const engine = engineSpy()
+    const scope = { engine: engine.engine, meter: meterOf(priced(session, 10_000)).meter }
+    const price = compactibleNow(session, scope)
+    await compactContextRange(scope, agentOn(session), SIGNAL)
+    const span = engine.calls[0]!
+    expect(price?.compactibleTokens).toBe((indexOf(session, span.end) - indexOf(session, span.start) + 1) * 10_000)
+  })
+
+  it('honours the scope\'s own retention budget rather than a fixed one', () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const scope = { engine: engineSpy().engine, meter: meterOf(priced(session, 10_000)).meter, retainTokens: 10_000 }
+    // One node covers the smaller budget, and the newest instruction pulls the
+    // trailing cut back one more node: nodes 7-8 stay verbatim.
+    expect(compactibleNow(session, scope)).toEqual({ compactibleTokens: 60_000, retainedTailTokens: 20_000 })
+  })
+
+  it('reports nothing to compact when the selection finds nothing safe', () => {
+    const session = conversation({ turns: 1, system: 'You are a test agent.' })
+    const scope = { engine: engineSpy().engine, meter: meterOf(priced(session, 10_000)).meter }
+    // Three nodes and a 32K budget: the whole surface stays, so nothing is
+    // compactible — a priced zero, not an unknown.
+    expect(compactibleNow(session, scope)).toEqual({ compactibleTokens: 0, retainedTailTokens: 30_000 })
+  })
+
+  it('answers nothing, rather than zero, when this scope cannot price its surface', () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    expect(compactibleNow(session, { engine: engineSpy().engine })).toBeUndefined()
+    // A stale measurement is the same fact: the nodes it names are not the ones
+    // this surface holds, so they price nothing.
+    const fresh = priced(session, 10_000)
+    const stale = meterOf({ totalTokens: fresh.totalTokens, nodes: fresh.nodes.slice(1) }).meter
+    expect(compactibleNow(session, { engine: engineSpy().engine, meter: stale })).toBeUndefined()
   })
 })
 

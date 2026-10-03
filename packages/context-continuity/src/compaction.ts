@@ -22,6 +22,10 @@
  * compaction lock, summarizes, replaces the span on the surface, and leaves the
  * log append-only; a failure there keeps the original surface, which is why
  * nothing here has to be undone.
+ *
+ * Selection and price are one decision, read twice: {@link compactibleNow}
+ * reports the same span to a status read that {@link compactContextRange} would
+ * hand to the engine.
  * @module @wowyuarm/dsh-context-continuity/compaction
  */
 
@@ -30,6 +34,7 @@ import type { CompactionAgentContext, CompactionResult } from '@deepseek-ai/dsh-
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { ContextCompactible } from './timeline.ts'
 
 /** How much of the most recent surface a compaction keeps verbatim by default. */
 export const DEFAULT_COMPACT_RETAIN_TOKENS = 32 * 1024
@@ -206,6 +211,39 @@ export function selectCompactionRange(
     return { kind: 'none', reason: 'no safe cut keeps every tool call together with its result' }
   }
   return { kind: 'range', range: { start: nodes[head]!, end: nodes[end]! } }
+}
+
+/**
+ * What a compaction started now would replace, and what it would keep verbatim,
+ * priced by the selection's own walk so a status read and the compaction it
+ * announces cannot disagree. A host reports this as the timeline's
+ * `compactible` field; this is the one place that computes it.
+ *
+ * Absent, rather than zero, when this scope cannot price its surface: "nothing
+ * is compactible" and "this number is unknown" are different facts, and only
+ * the first is worth showing.
+ */
+export function compactibleNow(session: Session, scope: ContextCompactionScope): ContextCompactible | undefined {
+  const meter = scope.meter
+  if (meter === undefined) return undefined
+  // A stale measurement prices nothing, exactly as it does in the selection: the
+  // nodes it names are no longer the surface's, so the sum would be a fiction.
+  const priced = pricedNodes(session, meter)
+  if (priced === undefined) return undefined
+  const total = priced.reduce((sum, node) => sum + node.tokens, 0)
+  const selection = selectCompactionRange(session, meter, scope.retainTokens ?? DEFAULT_COMPACT_RETAIN_TOKENS)
+  if (selection.kind === 'none') return { compactibleTokens: 0, retainedTailTokens: total }
+
+  const nodes = session.surface.nodes
+  const start = nodes.indexOf(selection.range.start)
+  const end = nodes.indexOf(selection.range.end)
+  // The selection names nodes of this surface by construction; a miss means the
+  // surface moved under the read, and a guessed price is worse than none.
+  if (start < 0 || end < start) return undefined
+  return {
+    compactibleTokens: priced.slice(start, end + 1).reduce((sum, node) => sum + node.tokens, 0),
+    retainedTailTokens: priced.slice(end + 1).reduce((sum, node) => sum + node.tokens, 0),
+  }
 }
 
 /**

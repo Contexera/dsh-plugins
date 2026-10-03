@@ -90,6 +90,34 @@ export interface ContextTimelineItem {
   readonly sourceSessionId?: SessionId
 }
 
+/**
+ * The measured shape of a subject's work set, as the host's token meter
+ * apportions it. A heuristic: it splits current request pressure into three
+ * buckets, carries no routing price, and is never a durable fact.
+ *
+ * `toolsTokens` prices the tool **schemas** this subject was offered, not the
+ * output of its tool calls. A tool result is a message and counts in
+ * `messagesTokens`.
+ */
+export interface ContextComposition {
+  readonly systemTokens: number
+  readonly toolsTokens: number
+  readonly messagesTokens: number
+}
+
+/**
+ * What an in-place compaction would do if it started now, priced by the same
+ * walk the compaction itself performs: how much could go behind a summary, and
+ * how much of the newest work would stay verbatim. Display only — the
+ * compaction picks its own range and revalidates it.
+ */
+export interface ContextCompactible {
+  /** Roughly how many tokens a compaction started now could replace; `0` when no stretch is safe. */
+  readonly compactibleTokens: number
+  /** Roughly how many of the newest tokens stay verbatim. */
+  readonly retainedTailTokens: number
+}
+
 /** One subject's bounded structural timeline. */
 export interface ContextTimeline {
   /** The current generation's measured usage, the basis every price was computed against. */
@@ -102,6 +130,19 @@ export interface ContextTimeline {
    * reader see where the handoff budget sits relative to the wall.
    */
   readonly hardLimit?: number
+  /**
+   * The work set's measured composition, when the host can price one. A host
+   * with no meter omits it, and the status then has no composition line: an
+   * unpriced work set is never reported as an empty one.
+   */
+  readonly composition?: ContextComposition
+  /**
+   * What a compaction started now could replace, when the host can price one. A
+   * host omits it when it cannot price one — no meter, or no compaction engine
+   * in this scope — so the status never promises a capability the subject's
+   * scope does not have.
+   */
+  readonly compactible?: ContextCompactible
   /** Newest first, deduplicated across generations, truncated at the requested limit. */
   readonly items: readonly ContextTimelineItem[]
   /** The unreadable ancestor that ended the walk early, when one did. */

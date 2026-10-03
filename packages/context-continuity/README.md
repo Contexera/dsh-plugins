@@ -33,8 +33,9 @@ every plugin that adopts this gives its agents the same set:
 - **`context_rollover`** — start a fresh Session but stay the same agent, carrying
   a handoff you write into the new one.
 - **`context_checkpoint`** — mark the current spot so you can come back to it.
-- **`context_timeline`** — look back over your own history and pick a spot that's
-  safe to return to.
+- **`context_status`** — read where your context stands: how many tokens it uses
+  against your budgets, how it is composed, how much could be compacted now, and
+  which earlier spots are safe to return to.
 - **`context_compact`** — shorten the Session you are in: one older stretch behind
   you becomes a summary, your recent work stays verbatim, and you keep working
   here. The log stays append-only, so the summary replaces what the agent sees,

@@ -207,7 +207,7 @@ generation recoverable** (never half-swap).
 
 `readContextTimeline` walks the subject's lineage — the current generation, then
 archived ancestors through your stored-Session reader — and returns the bounded,
-priced list of return anchors behind `context_timeline`. The engine owns the
+priced list of return anchors behind `context_status`. The engine owns the
 walk, the dedupe, the pricing, and the shared restorable-anchor rule; you supply
 the mechanism it cannot have as a pure library.
 
@@ -249,6 +249,18 @@ const timeline = await readContextTimeline({
 - **An unreadable ancestor ends the walk and is reported** in `incompleteFrom`:
   history is then complete through the last listed generation, and never
   silently short.
+- **Two priced facts are yours to add to the result, and both are optional.**
+  `composition` is the work set's measured shape (`systemTokens` /
+  `toolsTokens` / `messagesTokens`) — a heuristic split your meter already has,
+  and the one number a subject cannot derive. Note that `toolsTokens` prices the
+  tool **schemas** offered to it; a tool result is a message and counts in
+  `messagesTokens`. `compactible` is what a compaction started now would replace
+  and what it would keep verbatim; price it with the engine's
+  `compactibleNow(session, scope)` rather than by subtracting yourself, because
+  that runs the same selection `context_compact` performs — a status and the
+  action it announces then cannot disagree. Omit either one when you cannot
+  price it (no meter, no compaction engine in that scope): the status then
+  renders no line for it, and an unpriced number is never shown as a zero.
 
 ## Seam 6 — tools factory (shipped)
 
@@ -265,7 +277,16 @@ const tools = createContinuityTools({
   isRestorableRef: (ref, exec) => timelineOffered(subjectOf(exec), ref),
   requestRollover: (request, exec) => lifecycle.requestRollover(subjectOf(exec), request),
   recordCheckpoint: ({ name, callId }, exec) => bindings.record(subjectOf(exec), name, callId),
-  timeline: ({ limit }, exec) => readTimeline(subjectOf(exec), limit),
+  timeline: async ({ limit }, exec) => {
+    const subject = subjectOf(exec)
+    const compactible = compactibleNowFor(subject)   // compactibleNow(agent.session, compactionFor(agent))
+    return {
+      ...await readTimeline(subject, limit),
+      // Optional: the two priced facts the status renders (see seam 5).
+      composition: compositionOf(subject),           // { systemTokens, toolsTokens, messagesTokens }
+      ...(compactible === undefined ? {} : { compactible }),
+    }
+  },
   // The compaction capability of the CALLING agent's own scope, or undefined.
   // Resolving it is your addressing job: `ctx.get('compaction')` does not see a
   // service a preset mounted behind `isolate`, so address the preset's service.
@@ -287,7 +308,7 @@ const tools = createContinuityTools({
   topicNoun: 'Thread',
   topicNounPlural: 'Threads',
 })
-// register tools.rollover / tools.checkpoint / tools.timeline / tools.compact
+// register tools.rollover / tools.checkpoint / tools.status / tools.compact
 ```
 
 - **The engine decides, you report the fact.** `isRestorableRef` answers whether
@@ -298,7 +319,7 @@ const tools = createContinuityTools({
 - **`concludeTurn()` follows the durable intent, never precedes it.** The rollover
   and checkpoint bodies conclude the turn only after your adapter resolves; a
   rejection leaves the previous generation running and is what the model sees.
-  `context_timeline` is a read that never concludes a turn, and neither does
+  `context_status` is a read that never concludes a turn, and neither does
   `context_compact`: shortening a context keeps working in the turn it was asked
   from.
 - **An unavailable scope is a result, not a rejection.** `compactionFor` returning
@@ -337,14 +358,14 @@ const tools = createContinuityTools({
   role) so the model does not re-derive what it already receives; a handoff that
   restates identity, standing role, or facts already in those channels wastes the
   very context it is meant to preserve.
-- **The timeline speaks your vocabulary.** `timelineGuidance` splices your
-  boundary glossary into the `context_timeline` description, and
+- **The status speaks your vocabulary.** `timelineGuidance` splices your
+  boundary glossary into the `context_status` description, and
   `topicNoun`/`topicNounPlural` name what an anchor is attributed to (`Thread`
   rather than `topic`) in both the description and the rendered rows. The
   structural contract, the restorable rule, and "Structural only: no transcript
   content" stay engine-owned.
 - **Names are fixed:** `context_rollover`, `context_checkpoint`,
-  `context_timeline`, `context_compact`. The prose you override refers to them by
+  `context_status`, `context_compact`. The prose you override refers to them by
   name, so only
   subject-facing vocabulary is yours: the anti-forgery sentence, "a context change
   never rolls back an external effect", and the jobs/memory discipline are

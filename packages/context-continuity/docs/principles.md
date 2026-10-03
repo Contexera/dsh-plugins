@@ -104,7 +104,7 @@ memory before rolling over; the plugin never reads or writes those files.
 ## P7 — The product surface is first-class
 
 Because the plugin is a *solution* for a subject to manage its own context, the
-model-facing tools (`context_rollover`, `context_checkpoint`, `context_timeline`,
+model-facing tools (`context_rollover`, `context_checkpoint`, `context_status`,
 `context_compact`, `context_search`, and `context_read`) are a first-class deliverable,
 not an optional add-on. A consumer that only imported the engine and re-wrote the
 tools would duplicate the exact surface the plugin exists to standardize — so the
