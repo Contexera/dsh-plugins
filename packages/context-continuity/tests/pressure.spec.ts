@@ -12,14 +12,19 @@
 import { describe, expect, it } from 'vitest'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JevRequest, JevResult } from '@wowyuarm/dsh-jev'
 import {
+  COMPACTION_INSTRUCTION_SUMMARY,
   ContextPressurePolicy,
   PRESSURE_NOTICE_SUMMARY,
   contextPressureNoticeText,
   type PressureCompaction,
+  type PressureGate,
   type PressureInHand,
+  type PressureJudgement,
   type PressureLimits,
   type PressureLogSpan,
+  type PressureRelatedness,
   type PressureSurface,
 } from '../src/pressure.ts'
 import { OTHER_PLUGIN_ID, PLUGIN_ID, V3_RENAMED_KIND } from './test-producer.ts'
@@ -75,6 +80,9 @@ class FakeHost {
   compaction: PressureCompaction | undefined = undefined
   log: PressureLogSpan = span('session-1', 0)
   inHand: PressureInHand = { inHand: [], jobs: [] }
+  relatedness: PressureRelatedness | undefined = undefined
+  judge: PressureJudgement | undefined = undefined
+  readonly judgeCalls: JevRequest[] = []
   readonly steered: UserMessage[] = []
   readonly failures: string[] = []
   readonly logs: { readonly message: string; readonly subject: string }[] = []
@@ -101,6 +109,33 @@ class FakeHost {
 
   inHandFor(): PressureInHand {
     return this.inHand
+  }
+
+  relatednessFor(): PressureRelatedness | undefined {
+    return this.relatedness
+  }
+
+  judgeFor(): PressureJudgement | undefined {
+    return this.judge
+  }
+
+  /** One judge that answers with the given yes-probability, recording every request. */
+  answering(noul: number | 'malformed' | 'throws' | 'hangs'): FakeHost {
+    this.judge = {
+      decide: async (request) => {
+        this.judgeCalls.push(request)
+        if (noul === 'throws') throw new Error('judge unavailable')
+        if (noul === 'hangs') return await new Promise<never>(() => {})
+        return {
+          model: 'jev-test',
+          answers: noul === 'malformed'
+            ? { related: { type: 'choice', choice: 'related', probabilities: {}, confidence: 0.9 } }
+            : { related: { type: 'noul', noul } },
+          usage: undefined,
+        } as JevResult
+      },
+    }
+    return this
   }
 
   steer(_subject: string, notice: UserMessage): void {
@@ -153,7 +188,7 @@ class FakeHost {
 }
 
 /** One policy over a fresh host, wired to the host's own log sink. */
-function policyFor(host: FakeHost): ContextPressurePolicy<string> {
+function policyFor(host: FakeHost, gate: PressureGate = {}): ContextPressurePolicy<string> {
   const policy = new ContextPressurePolicy<string>({
     pluginId: host.pluginId,
     limitsFor: () => host.limitsFor(),
@@ -161,11 +196,21 @@ function policyFor(host: FakeHost): ContextPressurePolicy<string> {
     compactionFor: () => host.compactionFor(),
     logSpanFor: () => host.logSpanFor(),
     inHandFor: () => host.inHandFor(),
+    relatednessFor: () => host.relatednessFor(),
+    judgeFor: () => host.judgeFor(),
     steer: (subject, notice) => { host.steer(subject, notice) },
     failedFor: (subject, diagnostic) => { host.failedFor(subject, diagnostic) },
     log: (message, subject) => { host.warn(message, subject) },
-  })
+  }, {}, gate)
   return policy
+}
+
+/**
+ * One durable event this many milliseconds old. The gate reads the gap from the
+ * newest event's own timestamp, so a test states the gap rather than the clock.
+ */
+function idleEvent(idleMs: number): SessionEvent {
+  return { type: 'tool/result', seq: SessionSeq(0), time: Date.now() - idleMs, data: {} } as unknown as SessionEvent
 }
 
 function signal(): AbortSignal {
@@ -549,5 +594,180 @@ describe('the notice text', () => {
 
   it('the notice summary is frozen to the value already written into live logs', () => {
     expect(PRESSURE_NOTICE_SUMMARY).toBe('Context pressure: prepare a handoff')
+  })
+})
+
+describe('the long-gap relatedness gate', () => {
+  /** One host with a judge, a compaction capability, and a generation idle for `idleMs`. */
+  function gated(options: {
+    readonly usageTokens?: number
+    readonly idleMs?: number
+    readonly judge?: number | 'malformed' | 'throws' | 'hangs'
+  } = {}): FakeHost {
+    const host = new FakeHost().script('reduce')
+    host.limits = { usageTokens: options.usageTokens ?? 150_000, hardLimit: 256_000, handoffAt: 200_000 }
+    host.relatedness = { input: 'what is the status of the release?', recent: ['add the release window docs'] }
+    host.answering(options.judge ?? 0.05)
+    host.log = span('session-1', 0, idleEvent(options.idleMs ?? 45 * 60_000))
+    return host
+  }
+
+  it('an unrelated input after a long gap holds the step and steers one compaction instruction', async () => {
+    const host = gated()
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('hold')
+    expect(host.judgeCalls).toHaveLength(1)
+    expect(host.steered).toHaveLength(1)
+    const instruction = host.steered[0]!
+    expect(instruction.source).toMatchObject({ kind: PLUGIN_ID, summary: COMPACTION_INSTRUCTION_SUMMARY })
+    // The model is told the tool to call, and that its own input is not lost.
+    expect(noticeText(instruction)).toContain('context_compact')
+    expect(noticeText(instruction)).toContain('held, not lost')
+    expect(host.logs.some(entry => entry.message.includes('the step is held'))).toBe(true)
+  })
+
+  it('the question carries the input and the recent requests, and its own deadline', async () => {
+    const host = gated()
+    await policyFor(host).onPreStep('subject-1', signal())
+    const request = host.judgeCalls[0]!
+    expect(request.questions.related).toMatchObject({ type: 'noul' })
+    expect(request.state).toMatchObject({
+      current_input: 'what is the status of the release?',
+      recent_user_input: ['add the release window docs'],
+    })
+    expect(request.signal).toBeInstanceOf(AbortSignal)
+    expect(request.signal?.aborted).toBe(false)
+  })
+
+  it('a related input continues the step and says so', async () => {
+    const host = gated({ judge: 0.95 })
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.steered).toEqual([])
+    expect(host.logs.some(entry => entry.message.includes('continues the recent work'))).toBe(true)
+  })
+
+  it.each([
+    ['the judge is undecided', 0.5, 'did not settle'],
+    ['the judge fails', 'throws' as const, 'did not answer'],
+    ['the answer is not a yes/no', 'malformed' as const, 'no yes/no probability'],
+  ])('when %s the step continues without compacting, and is recorded', async (_name, judge, expected) => {
+    const host = gated({ judge: judge as number })
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.steered).toEqual([])
+    expect(host.logs.some(entry => entry.message.includes(expected))).toBe(true)
+  })
+
+  it('a judge that never answers is abandoned at the policy deadline, not waited on', async () => {
+    const host = gated({ judge: 'hangs' })
+    const decision = await policyFor(host, { judgeTimeoutMs: 10 }).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.steered).toEqual([])
+    expect(host.logs.some(entry => entry.message.includes('within 10ms'))).toBe(true)
+  })
+
+  it('below the token threshold the judge is never asked', async () => {
+    const host = gated({ usageTokens: 64_000 })
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('a recent turn is not a long gap, so the judge is never asked', async () => {
+    const host = gated({ idleMs: 60_000 })
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('the thresholds are overridable, and the override is what is applied', async () => {
+    const host = gated({ usageTokens: 64_000, idleMs: 60_000 })
+    const decision = await policyFor(host, { tokens: 32_000, idleMs: 30_000 }).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('hold')
+  })
+
+  it('a scope that cannot compact is never told to, whatever the judge says', async () => {
+    const host = gated()
+    host.compaction = undefined
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.steered).toEqual([])
+  })
+
+  it('a generation with no durable event has an unmeasurable gap, and is not held', async () => {
+    const host = gated()
+    host.log = span('session-1', 0)
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('a host with no judge installed leaves the gate off rather than failing', async () => {
+    const host = gated()
+    host.judge = undefined
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.steered).toEqual([])
+    expect(host.failures).toEqual([])
+  })
+
+  it('a host with no relatedness view leaves the gate off rather than failing', async () => {
+    const host = gated()
+    host.relatedness = undefined
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('an instruction that cannot be steered does not hold the step', async () => {
+    const host = gated()
+    const policy = new ContextPressurePolicy<string>({
+      pluginId: host.pluginId,
+      limitsFor: () => host.limitsFor(),
+      surfaceFor: () => host.surfaceFor(),
+      compactionFor: () => host.compactionFor(),
+      logSpanFor: () => host.logSpanFor(),
+      inHandFor: () => host.inHandFor(),
+      relatednessFor: () => host.relatednessFor(),
+      judgeFor: () => host.judgeFor(),
+      steer: () => { throw new Error('no live turn') },
+      failedFor: (subject, diagnostic) => { host.failedFor(subject, diagnostic) },
+      log: (message, subject) => { host.warn(message, subject) },
+    })
+    const decision = await policy.onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.logs.some(entry => entry.message.includes('the step was not held'))).toBe(true)
+    expect(policy.releaseHold('subject-1')).toBeUndefined()
+  })
+
+  it('a step already at the hard limit is reduced, never gated', async () => {
+    const host = gated({ usageTokens: 300_000 })
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.reductions).toEqual(['context-overflow'])
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('releasing a hold reports whether the reduction was measured', async () => {
+    const host = gated()
+    const policy = policyFor(host)
+    await policy.onPreStep('subject-1', signal())
+    // The compaction the instruction asked for landed on the durable surface.
+    host.surface = { ...host.surface, tokens: (host.surface.tokens ?? 0) - 40_000 }
+    expect(policy.releaseHold('subject-1')).toEqual({ reduced: true })
+    // One hold, one release: a second call has nothing left to release.
+    expect(policy.releaseHold('subject-1')).toBeUndefined()
+  })
+
+  it('releasing a hold whose compaction never happened reports that plainly', async () => {
+    const host = gated()
+    const policy = policyFor(host)
+    await policy.onPreStep('subject-1', signal())
+    expect(policy.releaseHold('subject-1')).toEqual({ reduced: false })
+  })
+
+  it('the instruction summary is frozen to the value it ships with', () => {
+    expect(COMPACTION_INSTRUCTION_SUMMARY).toBe('Context pressure: compact before continuing')
   })
 })

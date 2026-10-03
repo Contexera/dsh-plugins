@@ -14,6 +14,13 @@
  * turn to end and the Agent to be idle, captures later input so no
  * old-generation model request opens, and then defers to the host lifecycle
  * through {@link ContextContinuityHost.executeTransition}.
+ *
+ * The same capture serves a second, shorter-lived reason: a compaction hold. A
+ * pressure policy that answers `hold` rejected a step whose input is still
+ * wanted, and that input has to come back once the compaction is done — or once
+ * the turn ends without one. The hold is armed and released by the host
+ * ({@link holdClaimedInput} / {@link releaseHeldInput}); this coordinator owns
+ * only the latch that keeps the admission gate armed in between.
  * @module @wowyuarm/dsh-context-continuity/coordinator
  */
 
@@ -64,6 +71,13 @@ function intentFromPending(pending: PendingRolloverIntent): SubjectIntent {
 export class ContextContinuityCoordinator<SubjectId> {
   private readonly subjects = new Map<SubjectId, SubjectTransition>()
   private readonly capturedInput = new Map<SubjectId, readonly UserMessage[]>()
+  /**
+   * The Agents holding input for a same-generation compaction. A pressure
+   * policy that answers `hold` rejected a step whose messages are still in
+   * flight; until the hold is released nothing may admit another, or the model
+   * would open a step against the context the hold exists to shrink.
+   */
+  private readonly holds = new Map<SubjectId, Agent>()
   /** Per-subject latch for the in-process scheduling→delivery window. */
   private readonly scheduledContinuations = new Set<string>()
   private disposed = false
@@ -114,11 +128,54 @@ export class ContextContinuityCoordinator<SubjectId> {
    * input. The gate arms only for the old-generation Agent instance — the new
    * generation activates mid-swap and must be free to consume the handoff and
    * carried input immediately.
+   *
+   * A same-generation compaction hold arms the same gate for the same reason:
+   * the input that was kept has to be the input that comes back.
    */
   needsAdmissionGate(agent: Agent): boolean {
     const id = this.host.subjectForAgent(agent)?.id
     if (id === undefined) return false
+    if (this.holds.get(id) === agent) return true
     return this.subjects.get(id)?.agent === agent
+  }
+
+  /**
+   * Whether one Agent's subject is holding input for a same-generation
+   * compaction, and so admits no further step until the hold is released.
+   */
+  isHoldingInput(agent: Agent): boolean {
+    const id = this.host.subjectForAgent(agent)?.id
+    if (id === undefined) return false
+    return this.holds.get(id) === agent
+  }
+
+  /**
+   * Arm one subject's compaction hold and keep the messages its rejected step
+   * had already claimed. Arming and capturing are one call on purpose: the
+   * capture is refused while no hold is armed, so a host that did these in the
+   * other order would drop exactly the input the hold exists to preserve.
+   */
+  holdClaimedInput(agent: Agent, messages: readonly UserMessage[]): readonly UserMessage[] {
+    const id = this.host.subjectForAgent(agent)?.id
+    if (id === undefined) return []
+    const held = this.holds.get(id)
+    if (held !== undefined && held !== agent) return []
+    this.holds.set(id, agent)
+    return this.captureInput(agent, messages)
+  }
+
+  /**
+   * End one subject's compaction hold and return the input it kept, for the host
+   * to deliver as the subject's next input. The host calls this at the end of
+   * the held turn whether or not the compaction happened — a hold that is never
+   * released rejects every later step, so this is the one exit.
+   */
+  releaseHeldInput(agent: Agent): readonly UserMessage[] {
+    const id = this.host.subjectForAgent(agent)?.id
+    if (id === undefined) return []
+    if (this.holds.get(id) !== agent) return []
+    this.holds.delete(id)
+    return this.drainCapturedInput(id)
   }
 
   /**
@@ -131,7 +188,7 @@ export class ContextContinuityCoordinator<SubjectId> {
   captureQueuedInput(agent: Agent): readonly UserMessage[] {
     const id = this.host.subjectForAgent(agent)?.id
     if (id === undefined) return []
-    if (this.subjects.get(id)?.agent !== agent) return []
+    if (!this.capturesFor(id, agent)) return []
     const removed = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
     for (const message of removed) agent.inbox.remove(message.id)
     return this.captureInput(agent, removed)
@@ -149,7 +206,7 @@ export class ContextContinuityCoordinator<SubjectId> {
   private captureInput(agent: Agent, messages: readonly UserMessage[]): readonly UserMessage[] {
     const id = this.host.subjectForAgent(agent)?.id
     if (id === undefined) return []
-    if (this.subjects.get(id)?.agent !== agent) return []
+    if (!this.capturesFor(id, agent)) return []
     const preserved: UserMessage[] = []
     for (const message of messages) {
       if (isDroppedNotice(this.codec, this.host, message)) continue
@@ -157,6 +214,15 @@ export class ContextContinuityCoordinator<SubjectId> {
     }
     if (preserved.length > 0) this.capturedInput.set(id, [...(this.capturedInput.get(id) ?? []), ...preserved])
     return preserved
+  }
+
+  /**
+   * Whether one Agent may have input kept for its subject: it holds the pending
+   * rollover, or the compaction hold, or both. Either arm means the input this
+   * Agent was about to admit belongs to a context that must not run.
+   */
+  private capturesFor(id: SubjectId, agent: Agent): boolean {
+    return this.subjects.get(id)?.agent === agent || this.holds.get(id) === agent
   }
 
   /** Drain the captured input of one subject for delivery after the handoff. */
@@ -170,12 +236,14 @@ export class ContextContinuityCoordinator<SubjectId> {
   stopTracking(id: SubjectId): void {
     this.subjects.delete(id)
     this.capturedInput.delete(id)
+    this.holds.delete(id)
   }
 
   dispose(): void {
     this.disposed = true
     this.subjects.clear()
     this.capturedInput.clear()
+    this.holds.clear()
   }
 
   private onToolResult(id: SubjectId, agent: Agent, event: SessionEvent & { type: 'tool/result' }): void {
@@ -267,6 +335,10 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   private async performTransition(id: SubjectId, previousSessionId: SessionId, transition: SubjectTransition): Promise<void> {
     const identity = this.host.rolloverIdentity(previousSessionId, transition.intent.toolCallId)
+    // A hold that survived into the swap is answered by the swap itself: the
+    // captured input travels as carried input, and the successor generation
+    // starts ungated.
+    this.holds.delete(id)
     const plan: TransitionPlan = {
       previousSessionId,
       newSessionId: identity.newSessionId,

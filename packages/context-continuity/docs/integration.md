@@ -9,7 +9,8 @@ single subject.
 The engine owns the universal mechanics — the idle-boundary generation swap,
 the admission gate, carried input, checkpoint continuations, the projection
 fold, the lineage walk, the shared return-anchor policy, the model-facing tools
-with their validation, the bounded retrieval ladder, and the pressure policy. It
+with their validation, the bounded retrieval ladder, and the pressure policy
+(including the long-gap gate). It
 knows nothing about what your subject is or what your domain treats as
 meaningful. You supply exactly that, through the seams below.
 
@@ -27,6 +28,7 @@ Every seam below is **shipped**: implemented and unit-tested in this package.
 | Tools factory (`createContinuityTools`) | shipped |
 | Retrieval ladder (`createSearchTools`, `SearchScopeProvider`) | shipped |
 | Pressure policy (`ContextPressurePolicy`) | shipped |
+| Long-gap gate (`relatednessFor` + `judgeFor`, optional) | shipped |
 
 Everything a host reaches for is exported from the package root
 (`@wowyuarm/dsh-context-continuity`).
@@ -532,6 +534,64 @@ const decision = await pressure.onPreStep(member, signal)   // continue | notice
   cleared, or is resuming from an earlier anchor or moving to another session. When
   it does not resolve, a fresh generation stays the default and no compaction tool
   is named at all: a subject is never told to call a tool its scope lacks.
+
+## Seam 9 — the long-gap gate (shipped, optional)
+
+A subject that comes back to a large context after a long absence is usually
+starting new work, and the old context is dead weight it pays for on every step.
+The gate asks a judge once whether the arriving input continues the recent work.
+Two optional host members switch it on; omit either and the gate stays off,
+which is a supported deployment and never a failure.
+
+```ts
+import { ContextPressurePolicy, DEFAULT_GATE_TOKENS } from '@wowyuarm/dsh-context-continuity'
+
+const pressure = new ContextPressurePolicy<MemberId>({
+  /* … seam 8 … */
+  relatednessFor: member => ({
+    input: pendingInputTextOf(member),        // the messages this pre-step is admitting
+    recent: recentUserInputsOf(member),       // oldest first
+  }),
+  judgeFor: member => ctx.jev,                // anything with decide(request)
+}, { compactToolName: 'context_compact' }, { tokens: DEFAULT_GATE_TOKENS })
+
+const decision = await pressure.onPreStep(member, signal)   // continue | notice | hold | reject
+if (decision.kind === 'hold') {
+  contextManagement.holdClaimedInput(agent, messages)       // arm the gate AND keep the input
+  return { kind: 'reject' }
+}
+```
+
+- **`hold` is its own decision.** It says the input this step claimed is kept, so
+  the host preserves it; `reject` says the step cannot run and has nothing to
+  keep, which is what the hard limit returns. Do not treat them alike.
+- **Arming and capturing are one call.** `holdClaimedInput` arms the same-generation
+  gate and keeps the messages in one step, because a capture taken before the gate
+  is armed keeps nothing.
+- **The gate is also the admission gate.** While a hold is armed,
+  `needsAdmissionGate` is true for that Agent, so no later step opens behind it.
+- **The host owns the exit, and there is exactly one.** At the end of the held
+  turn — whether or not the compaction happened — call
+  `pressure.releaseHold(member)` for the verdict and
+  `coordinator.releaseHeldInput(agent)` for the kept messages, then deliver them.
+  A hold that is never released rejects every later step: nothing else clears it,
+  and an unrecorded hold is reported as *not* reduced rather than assumed
+  successful.
+- **The gap is measured from the log, not from memory.** The engine reads the
+  newest event's own timestamp, so a restart cannot look like a half-hour
+  absence, and a generation with no event at all has no measurable gap and is
+  not gated.
+- **The deadline is the engine's.** The judge is called with a signal that is
+  cancelled at `judgeTimeoutMs` (default `DEFAULT_GATE_JUDGE_TIMEOUT_MS`), and the
+  engine stops waiting at the same instant whether or not the judge honours it —
+  this call sits on the path that starts a turn.
+- **Every ungated outcome is recorded.** Related, undecided, timed out, failed,
+  malformed, no judge, no compaction capability: the step continues and the
+  reason is logged. A gate that decided not to compact is never silently
+  indistinguishable from one that never ran.
+- **The thresholds are defaults, not policy.** `DEFAULT_GATE_TOKENS` and
+  `DEFAULT_GATE_IDLE_MS` are exported; the third constructor argument overrides
+  them per policy.
 
 ## Compatibility red lines (durable identity)
 

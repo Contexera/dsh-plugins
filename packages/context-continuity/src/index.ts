@@ -161,17 +161,26 @@ export type {
 } from './stored-session-reader.ts'
 
 export {
+  COMPACTION_INSTRUCTION_SUMMARY,
+  DEFAULT_GATE_IDLE_MS,
+  DEFAULT_GATE_JUDGE_TIMEOUT_MS,
+  DEFAULT_GATE_TOKENS,
   PRESSURE_NOTICE_SUMMARY,
   ContextPressurePolicy,
+  compactionInstructionText,
   contextPressureNoticeText,
 } from './pressure.ts'
 export type {
   PressureCompaction,
+  PressureGate,
+  PressureHoldOutcome,
   PressureInHand,
+  PressureJudgement,
   PressureLimits,
   PressureLogSpan,
   PressureNoticeText,
   PressurePolicyHost,
+  PressureRelatedness,
   PressureStepDecision,
   PressureSurface,
 } from './pressure.ts'

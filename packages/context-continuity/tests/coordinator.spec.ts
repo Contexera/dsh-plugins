@@ -478,3 +478,95 @@ describe('lifecycle', () => {
     expect(test.coordinator.isTransitioning(SUBJECT)).toBe(true)
   })
 })
+
+describe('same-generation compaction hold', () => {
+  it('an armed hold admits nothing, and releasing it returns the input it kept', () => {
+    const test = harness()
+    const input = external('what is the status of the release?')
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+
+    expect(test.coordinator.holdClaimedInput(test.asAgent, [input])).toEqual([input])
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(true)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(true)
+
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([input])
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+    // One hold, one release: the input is returned exactly once.
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([])
+  })
+
+  it('arming and capturing are one call, because a capture taken first keeps nothing', () => {
+    const test = harness()
+    const input = external('continue')
+    // The capture is refused while no hold is armed, which is why the hold and
+    // the capture cannot be two host calls in the other order.
+    expect(test.coordinator.captureClaimedInput(test.asAgent, [input])).toEqual([])
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([input])
+  })
+
+  it('keeps several claimed messages in the order they were claimed', () => {
+    const test = harness()
+    const first = external('first')
+    const second = external('second')
+    test.coordinator.holdClaimedInput(test.asAgent, [first])
+    test.coordinator.holdClaimedInput(test.asAgent, [second])
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([first, second])
+  })
+
+  it('drains the inbox into the hold too, so nothing opens a step behind it', () => {
+    const test = harness()
+    const queued = external('queued while held')
+    test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
+    test.agent.inbox.nextTurn.push(queued)
+    expect(test.coordinator.captureQueuedInput(test.asAgent)).toEqual([queued])
+    expect(test.agent.inbox.nextTurn).toEqual([])
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toHaveLength(2)
+  })
+
+  it('drops an ephemeral notice while holding, exactly as it does at a rollover', () => {
+    const test = harness()
+    const kept = external('real input')
+    const dropped = notice('domain notice')
+    expect(test.coordinator.holdClaimedInput(test.asAgent, [dropped, kept])).toEqual([kept])
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([kept])
+  })
+
+  it('returns nothing for an Agent that holds nothing', () => {
+    const test = harness()
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([])
+  })
+
+  it('a rollover answers the hold by carrying its input into the new generation', async () => {
+    const test = harness()
+    const input = external('held across the swap')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.armIntent({ resultSeq: 12 })
+    expect(test.coordinator.isTransitioning(SUBJECT)).toBe(true)
+
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.plans).toHaveLength(1)
+    expect(test.plans[0]!.carriedInput).toEqual([input])
+    // The successor generation starts ungated: the hold was answered, not left armed.
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+  })
+
+  it('forgets one subject\'s hold when its bookkeeping is dropped', () => {
+    const test = harness()
+    test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
+    test.coordinator.stopTracking(SUBJECT)
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+  })
+
+  it('a disposal releases every hold it was carrying', () => {
+    const test = harness()
+    test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
+    test.coordinator.dispose()
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+  })
+})

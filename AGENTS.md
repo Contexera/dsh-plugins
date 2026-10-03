@@ -5,6 +5,13 @@
 ships to npm independently; the repo only unifies install, tooling, and release.
 It adds no cross-package coupling — the packages do not depend on each other.
 
+One exception is recorded: `dsh-context-continuity` declares `dsh-jev` as an
+**optional peer** (and a published-version devDependency) because the long-gap
+gate has to state its question and read its answer in that package's own shapes.
+It is a peer, never a workspace link, so a deployment that installs no judge
+still loads the engine; `check:peers` reads only the `@deepseek-ai/dsh-*` line
+and is unaffected.
+
 ## Authority order
 
 1. **Current behavior:** each package's `src/` and `tests/`.

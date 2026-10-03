@@ -47,10 +47,14 @@
     "@deepseek-ai/dsh-session-persistence": ">=0.2.0-rc.1 <0.2.1",
     "@deepseek-ai/dsh-session-projection": ">=0.2.0-rc.1 <0.2.1",
     "@deepseek-ai/dsh-session-query": ">=0.2.0-rc.1 <0.2.1",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.2.1"
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.2.1",
+    "@wowyuarm/dsh-jev": "^0.1.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-query": {
+      "optional": true
+    },
+    "@wowyuarm/dsh-jev": {
       "optional": true
     }
   },
@@ -65,6 +69,7 @@
     "@deepseek-ai/dsh-session-query": "0.2.0-rc.1",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.1",
     "@types/node": "^24.0.0",
+    "@wowyuarm/dsh-jev": "0.1.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.8"
   },

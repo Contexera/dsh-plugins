@@ -11,6 +11,20 @@
  * pressure measurably fell. A subject whose route capacity cannot be resolved is
  * refused rather than treated as unbounded.
  *
+ * The one exception to "a big context is the subject's own business" is the long
+ * gap: a subject that comes back to a large context after half an hour away is
+ * usually starting new work, and the old context is dead weight it will pay for
+ * on every step. When a host supplies both a relatedness view and a judge, a step
+ * at or above {@link DEFAULT_GATE_TOKENS} whose generation has been idle for
+ * {@link DEFAULT_GATE_IDLE_MS} is put to the judge once. An unrelated answer
+ * steers one compaction instruction and reports {@link PressureStepDecision} as
+ * `hold`, which tells the host to keep the input it was admitting; everything
+ * else — related, undecided, timed out, failed, no judge installed — continues
+ * unchanged and is *recorded*, so a gate that did not fire is never silently
+ * indistinguishable from one that never ran. The gate never decides how long to
+ * wait: the pre-step call is on the path that starts a turn, so the judge gets a
+ * deadline far tighter than its own retry budget.
+ *
  * What the notice says about work in hand is the host's vocabulary (a Team
  * Member has Claims and jobs; another subject has whatever it has), and so are
  * the meter, the compaction capability, and the steer itself. What the notice
@@ -28,6 +42,7 @@
 
 import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JevRequest, JevResult } from '@wowyuarm/dsh-jev'
 import { producerNoticeSource, v3RenamedSourceKind } from './message-codec.ts'
 import { CONTEXT_ROLLOVER_TOOL_NAME } from './projection.ts'
 import { CONTEXT_COMPACT_TOOL_NAME } from './tools.ts'
@@ -37,6 +52,46 @@ import { CONTEXT_COMPACT_TOOL_NAME } from './tools.ts'
  * written into live Session logs must keep decoding as this policy's own.
  */
 export const PRESSURE_NOTICE_SUMMARY = 'Context pressure: prepare a handoff'
+
+/**
+ * The `source.summary` of the long-gap compaction instruction. Frozen for the
+ * same reason as the notice's: an instruction already in a live log has to keep
+ * decoding as this policy's own.
+ */
+export const COMPACTION_INSTRUCTION_SUMMARY = 'Context pressure: compact before continuing'
+
+/** At or above this context size the long-gap relatedness gate may hold a step. */
+export const DEFAULT_GATE_TOKENS = 128_000
+
+/** A generation idle for at least this long counts as a long gap. */
+export const DEFAULT_GATE_IDLE_MS = 1_800_000
+
+/**
+ * How long one relatedness judgement may take. Deliberately far below the
+ * judge's own retry budget: this call sits on the path that starts a turn, and a
+ * subject waiting on a verdict pays for it in time to first token.
+ */
+export const DEFAULT_GATE_JUDGE_TIMEOUT_MS = 5_000
+
+/** How many of the most recent inputs one judgement sees. */
+const GATE_RECENT_LIMIT = 5
+
+/** How much of any one input one judgement sees. */
+const GATE_INPUT_CHARS = 2_000
+
+/**
+ * The judged probability at or above which the input continues the recent work.
+ * A `noul` answer carries no confidence of its own, so "the judge cannot tell"
+ * is expressed as the band between this and {@link GATE_UNRELATED_AT} rather
+ * than as a second number.
+ */
+const GATE_RELATED_AT = 0.6
+
+/** The judged probability at or below which the input is unrelated to the recent work. */
+const GATE_UNRELATED_AT = 0.4
+
+/** The one question the gate asks, as the judge's own wording. */
+const GATE_QUESTION = 'Does the current input continue the recent user requests, or does it start unrelated work?'
 
 /** The effective context budget of one subject's current route. */
 export interface PressureLimits {
@@ -89,6 +144,49 @@ export interface PressureInHand {
 }
 
 /**
+ * The view one relatedness judgement is made from: the input this step is
+ * admitting, and the user input of the generation it is arriving into. Only a
+ * host can build this — the admitting messages are the host's own pre-step
+ * argument, and which of them count as real external input is domain knowledge
+ * the engine does not have.
+ */
+export interface PressureRelatedness {
+  /** The input this step is admitting, as the subject wrote it. */
+  readonly input: string
+  /** The generation's recent user input, oldest first. */
+  readonly recent: readonly string[]
+}
+
+/**
+ * The relatedness judge in one subject's scope, e.g. the `jev` service behind
+ * `ctx.jev`. The narrow shape states what this policy uses; the engine builds
+ * the question and reads the answer, because what to ask and when to act on the
+ * answer is the policy, not the transport.
+ */
+export interface PressureJudgement {
+  decide(request: JevRequest): Promise<JevResult>
+}
+
+/**
+ * The long-gap gate's thresholds. Every field falls back to its exported
+ * default, so a host that overrides nothing still gets the documented gate.
+ */
+export interface PressureGate {
+  /** At or above this context size the gate may hold a step. */
+  readonly tokens?: number | undefined
+  /** A generation idle for at least this long counts as a long gap. */
+  readonly idleMs?: number | undefined
+  /** How long one judgement may take before the step proceeds ungated. */
+  readonly judgeTimeoutMs?: number | undefined
+}
+
+/** What releasing one subject's long-gap hold found. */
+export interface PressureHoldOutcome {
+  /** Whether the reduction the instruction asked for was measured. */
+  readonly reduced: boolean
+}
+
+/**
  * Everything the pressure policy needs from a host. Every member is per-subject
  * and resolved at call time: one policy serves every subject a host runs.
  */
@@ -105,6 +203,20 @@ export interface PressurePolicyHost<SubjectId> {
   logSpanFor(subject: SubjectId): PressureLogSpan
   /** What the subject has in hand, for the notice. */
   inHandFor(subject: SubjectId): PressureInHand
+  /**
+   * The input this step is admitting and the generation's recent user input, for
+   * the long-gap relatedness gate. Absent — the member itself, or its return —
+   * means this host offers no such view, and the gate stays off rather than
+   * failing. Only the host can answer this: the admitting messages are its own
+   * pre-step argument.
+   */
+  relatednessFor?(subject: SubjectId): PressureRelatedness | undefined
+  /**
+   * The relatedness judge in this subject's scope. Absent when the host installed
+   * none, which switches the gate off — a missing judge is a deployment choice,
+   * never a failure.
+   */
+  judgeFor?(subject: SubjectId): PressureJudgement | undefined
   /**
    * Steer one notice into the subject's running turn. The host must record it in
    * the subject's own durable log — the latch reads that evidence back, so a
@@ -133,6 +245,14 @@ export interface PressureNoticeText {
 export type PressureStepDecision =
   | { readonly kind: 'continue' }
   | { readonly kind: 'notice' }
+  /**
+   * The long-gap gate kept the input this step was admitting, and one compaction
+   * instruction is already steered into its place. The host must preserve the
+   * messages this step claimed — {@link ContextContinuityCoordinator.holdClaimedInput}
+   * is that call — and reject the step. Distinct from `reject` because a refusal
+   * at the hard limit has no input to keep: those messages were already reduced.
+   */
+  | { readonly kind: 'hold' }
   | { readonly kind: 'reject' }
 
 const DEFAULT_TEXT: Required<PressureNoticeText> = {
@@ -144,6 +264,7 @@ const DEFAULT_TEXT: Required<PressureNoticeText> = {
 
 const CONTINUE: PressureStepDecision = Object.freeze({ kind: 'continue' })
 const NOTICE: PressureStepDecision = Object.freeze({ kind: 'notice' })
+const HOLD: PressureStepDecision = Object.freeze({ kind: 'hold' })
 const REJECT: PressureStepDecision = Object.freeze({ kind: 'reject' })
 
 /** One error as a readable sentence: the message when there is one, the value otherwise. */
@@ -189,6 +310,27 @@ export function contextPressureNoticeText(
     `Context pressure: ${input.usageTokens} tokens measured; the handoff budget is ${input.handoffAt} and the hard limit is ${input.hardLimit}.`,
     `${wording.inHandLabel}: ${inHand}. ${wording.jobsLabel}: ${jobs}.`,
     guidance,
+  ].join(' ')
+}
+
+/**
+ * The instruction one held subject receives in place of the input it just sent:
+ * what was measured, what to do now, and — the part that keeps the model from
+ * panicking about its own message — that the held input is coming back.
+ */
+export function compactionInstructionText(
+  input: {
+    readonly usageTokens: number
+    readonly idleMs: number
+  },
+  text: PressureNoticeText = {},
+): string {
+  const compactToolName = text.compactToolName ?? DEFAULT_TEXT.compactToolName
+  const minutes = Math.round(input.idleMs / 60_000)
+  return [
+    `Context pressure: ${input.usageTokens} tokens are still in context after ${minutes} minutes away, so this turn starts with a compaction instead of the input you sent.`,
+    `Call ${compactToolName} now to shorten this generation in place — your recent work stays verbatim.`,
+    'Your input is held, not lost: it returns as soon as this turn ends, whether or not the compaction happened.',
   ].join(' ')
 }
 
@@ -258,18 +400,30 @@ export class ContextPressurePolicy<SubjectId> {
    */
   private readonly noticeSeen = new Map<SubjectId, NoticeLatch>()
 
+  /**
+   * The surface reading taken when one subject's step was held for the long-gap
+   * gate. Kept here, and not on the host, because proving a reduction is this
+   * policy's own rule: releasing a hold asks the same question the hard limit
+   * asks, and answers it from the same two readings. Identity is the subject, so
+   * a rollover drops the entry rather than carrying a stale reading across.
+   */
+  private readonly holds = new Map<SubjectId, PressureSurface>()
+
   private disposed = false
 
   constructor(
     private readonly host: PressurePolicyHost<SubjectId>,
     private readonly text: PressureNoticeText = {},
+    private readonly gate: PressureGate = {},
   ) {}
 
   /**
    * Pre-step policy for one subject: below the handoff budget nothing happens;
    * at the handoff budget one structured notice per generation is steered into
    * the running turn; at the hard limit the request is forced through a
-   * reduction first and refused when that cannot be proven.
+   * reduction first and refused when that cannot be proven; and a step arriving
+   * into a large context after a long gap is put to the relatedness judge first,
+   * which may hold it instead.
    */
   async onPreStep(subject: SubjectId, signal: AbortSignal): Promise<PressureStepDecision> {
     if (this.disposed || signal.aborted) return CONTINUE
@@ -282,6 +436,11 @@ export class ContextPressurePolicy<SubjectId> {
     }
     const { usageTokens, hardLimit, handoffAt } = limits
     if (usageTokens >= hardLimit) return (await this.enforceHardLimit(subject, signal)) ? CONTINUE : REJECT
+    // The gate runs before the notice because a held step never executes: a
+    // notice steered into a step that is about to be refused would be spent for
+    // nothing, and the compaction a held step asks for is what the notice would
+    // have asked for anyway.
+    if (await this.gateStep(subject, usageTokens, signal)) return HOLD
     if (usageTokens >= handoffAt && !this.noticeDelivered(subject)) {
       const inHand = this.host.inHandFor(subject)
       const notice = createUserMessage({
@@ -308,6 +467,24 @@ export class ContextPressurePolicy<SubjectId> {
       return NOTICE
     }
     return CONTINUE
+  }
+
+  /**
+   * Release one subject's long-gap hold at the end of the turn the instruction
+   * opened, reporting whether the reduction that instruction asked for was
+   * measured. The host must call this for every hold it armed: an armed hold
+   * admits no further step, and the messages it kept are only returned by
+   * {@link ContextContinuityCoordinator.releaseHeldInput}.
+   *
+   * Returns undefined when this subject held nothing — including when the host
+   * armed a hold the policy never recorded, which is reported as "not measured"
+   * rather than assumed successful.
+   */
+  releaseHold(subject: SubjectId): PressureHoldOutcome | undefined {
+    const before = this.holds.get(subject)
+    if (before === undefined) return undefined
+    this.holds.delete(subject)
+    return { reduced: reductionProven(before, this.host.surfaceFor(subject)) }
   }
 
   /**
@@ -347,10 +524,132 @@ export class ContextPressurePolicy<SubjectId> {
     this.overflowRetries.delete(subject)
   }
 
+  /**
+   * The long-gap relatedness gate for one step, which may hold it. Every reason
+   * the gate does not fire is recorded: a policy that decides not to compact has
+   * to be distinguishable from one that never looked.
+   * @returns whether this step was held.
+   */
+  private async gateStep(subject: SubjectId, usageTokens: number, signal: AbortSignal): Promise<boolean> {
+    const tokens = this.gate.tokens ?? DEFAULT_GATE_TOKENS
+    if (usageTokens < tokens) return false
+    const relatedness = this.host.relatednessFor?.(subject)
+    if (relatedness === undefined || relatedness.input.trim().length === 0) return false
+    const judge = this.host.judgeFor?.(subject)
+    if (judge === undefined) return false
+    // Telling a model to compact in a scope that cannot compact is a request it
+    // can only fail; the gate stays off rather than holding a step for nothing.
+    if (this.host.compactionFor(subject) === undefined) return false
+    const idleMs = this.idleMsFor(subject)
+    const idleFloor = this.gate.idleMs ?? DEFAULT_GATE_IDLE_MS
+    if (idleMs === undefined || idleMs < idleFloor) return false
+
+    if (await this.judgeRelatedness(subject, relatedness, judge, signal) !== 'unrelated') return false
+    const instruction = createUserMessage({
+      content: [{ type: 'text', text: compactionInstructionText({ usageTokens, idleMs }, this.text) }],
+      source: producerNoticeSource(this.host.pluginId, COMPACTION_INSTRUCTION_SUMMARY),
+    })
+    const before = this.host.surfaceFor(subject)
+    try {
+      this.host.steer(subject, instruction)
+    } catch (error) {
+      // No instruction means nothing for the model to act on: holding the step
+      // would stall the subject behind a message that never arrived.
+      this.host.log(`context gate compaction instruction failed: ${describeFailure(error)}; the step was not held`, subject)
+      return false
+    }
+    this.holds.set(subject, before)
+    this.host.log(`context gate: ${usageTokens} tokens after ${Math.round(idleMs / 60_000)} minutes idle, and the judge reads the input as unrelated work; the step is held for one compaction`, subject)
+    return true
+  }
+
+  /**
+   * How long this subject's generation has been idle, from the newest durable
+   * event it has. Read from the log rather than reported by the host, because a
+   * restart has no memory of when the last turn ran and would otherwise look
+   * like a gap. Undefined when the span carries no event at all: an unmeasurable
+   * gap is not a long gap, and the gate stays off.
+   */
+  private idleMsFor(subject: SubjectId): number | undefined {
+    const events = this.host.logSpanFor(subject).events
+    const newest = events[events.length - 1]
+    if (newest === undefined) return undefined
+    return Date.now() - newest.time
+  }
+
+  /**
+   * One relatedness judgement. Everything that is not a clear answer — a
+   * rejection, a missing or malformed answer, the band between the two
+   * thresholds — continues the step without compacting, and says so.
+   */
+  private async judgeRelatedness(
+    subject: SubjectId,
+    relatedness: PressureRelatedness,
+    judge: PressureJudgement,
+    signal: AbortSignal,
+  ): Promise<'related' | 'unrelated' | 'undecidable'> {
+    const timeoutMs = this.gate.judgeTimeoutMs ?? DEFAULT_GATE_JUDGE_TIMEOUT_MS
+    // The judge's own retry budget is sized for a background pass, and this call
+    // is on the path that starts a turn, so the deadline is ours: the signal asks
+    // a conforming judge to stop — and one never retries a call its caller
+    // cancelled — while the race below is what stops *us* waiting for a judge
+    // that ignores it. A pre-step that never returns is a subject that never runs.
+    const cutoff = new AbortController()
+    const timer = setTimeout(() => {
+      cutoff.abort(new Error(`the relatedness judge did not answer within ${timeoutMs}ms`))
+    }, timeoutMs)
+    const expired = new Promise<never>((_resolve, reject) => {
+      cutoff.signal.addEventListener('abort', () => { reject(cutoff.signal.reason) }, { once: true })
+    })
+    const request: JevRequest = {
+      state: {
+        recent_user_input: relatedness.recent.slice(-GATE_RECENT_LIMIT).map(input => input.slice(0, GATE_INPUT_CHARS)),
+        current_input: relatedness.input.slice(0, GATE_INPUT_CHARS),
+      },
+      questions: {
+        related: {
+          type: 'noul',
+          instructions: GATE_QUESTION,
+          criteria: {
+            true: 'The current input continues, answers, or follows on from the recent user requests.',
+            false: 'The current input opens a subject the recent user requests do not mention.',
+          },
+        },
+      },
+      signal: AbortSignal.any([signal, cutoff.signal]),
+    }
+    let result: JevResult
+    try {
+      const call = judge.decide(request)
+      // The call that loses the race must not surface as an unhandled rejection.
+      call.catch(() => {})
+      result = await Promise.race([call, expired])
+    } catch (error) {
+      if (signal.aborted) return 'undecidable'
+      this.host.log(`context gate: the relatedness judge did not answer (${describeFailure(error)}); the step continues without compacting`, subject)
+      return 'undecidable'
+    } finally {
+      clearTimeout(timer)
+    }
+    const answer = result.answers.related
+    if (answer?.type !== 'noul' || !Number.isFinite(answer.noul)) {
+      this.host.log('context gate: the relatedness judge returned no yes/no probability; the step continues without compacting', subject)
+      return 'undecidable'
+    }
+    if (answer.noul <= GATE_UNRELATED_AT) return 'unrelated'
+    if (answer.noul >= GATE_RELATED_AT) {
+      this.host.log(`context gate: the input continues the recent work (relatedness ${answer.noul}); the step continues without compacting`, subject)
+      return 'related'
+    }
+    this.host.log(`context gate: the relatedness judge did not settle the question (relatedness ${answer.noul}); the step continues without compacting`, subject)
+    return 'undecidable'
+  }
+
   dispose(): void {
     this.disposed = true
     this.overflowRetries.clear()
     this.noticeSeen.clear()
+    this.holds.clear()
   }
 
   /**
