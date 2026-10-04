@@ -105,8 +105,8 @@ Both adapters honour `HTTPS_PROXY`/`NO_PROXY` (Node's own fetch does not, unless
 A DSH release can reach this package only through the two published packages it
 imports: `@deepseek-ai/cordis` (the plugin and service API) and
 `@deepseek-ai/schemastery` (row config). No `@deepseek-ai/dsh-*` package is
-imported — `npm run check:boundaries` fails the build if one appears — so the
-host coupling is exactly those two versions.
+imported — the package's `check:boundaries` script fails the build if one
+appears — so the host coupling is exactly those two versions.
 
 | Runtime | cordis | schemastery | Verified by |
 | --- | --- | --- | --- |
@@ -123,7 +123,7 @@ against either without a second copy of cordis in the profile.
 Re-verify against a running DSH:
 
 ```sh
-npm run build
+pnpm --filter @wowyuarm/dsh-channel-gateway build
 cat > /tmp/channel-gateway.yml <<'EOF'
 - insert:
     - id: channel-gateway
@@ -140,16 +140,16 @@ rather than the import alone, add a second row to the overlay that declares
 ## Development
 
 ```sh
-npm install
-npm run typecheck     # tsc, strict
-npm test              # boundary guard + vitest
-npm run build         # emits lib/
+pnpm install    # once, at the repository root
+pnpm --filter @wowyuarm/dsh-channel-gateway typecheck  # tsc, strict
+pnpm --filter @wowyuarm/dsh-channel-gateway test       # boundary guard + vitest
+pnpm --filter @wowyuarm/dsh-channel-gateway build      # emits lib/
 ```
 
 `src/` may import only its own relative modules, Node builtins, and
 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`; adapters may add `undici`.
-`npm run check:boundaries` enforces exactly that, so the neutral seam cannot
-quietly acquire a host dependency.
+`pnpm --filter @wowyuarm/dsh-channel-gateway check:boundaries` enforces exactly
+that, so the neutral seam cannot quietly acquire a host dependency.
 
 ## License
 

@@ -89,7 +89,7 @@ export function apply(ctx: Context) {
 
 DSH 的版本变化只可能经由本包 import 的两个已发布包传导到此处：`@deepseek-ai/cordis`
 （插件与 service API）和 `@deepseek-ai/schemastery`（行配置）。本包不 import 任何
-`@deepseek-ai/dsh-*` 包——一旦出现，`npm run check:boundaries` 直接让构建失败——
+`@deepseek-ai/dsh-*` 包——一旦出现，本包的 `check:boundaries` 脚本直接让构建失败——
 所以宿主耦合就是这两个版本。
 
 | 运行时 | cordis | schemastery | 验证方式 |
@@ -105,7 +105,7 @@ peer 区间保持 `^4.0.1` / `^3.18.1`：下界容纳旧 DSH 线，上界容纳�
 针对正在运行的 DSH 复验：
 
 ```sh
-npm run build
+pnpm --filter @wowyuarm/dsh-channel-gateway build
 cat > /tmp/channel-gateway.yml <<'EOF'
 - insert:
     - id: channel-gateway
@@ -121,14 +121,15 @@ dsh --profile <profile> --patch /tmp/channel-gateway.yml --help
 ## 开发
 
 ```sh
-npm install
-npm run typecheck     # tsc，strict
-npm test              # 边界守卫 + vitest
-npm run build         # 产出 lib/
+pnpm install    # 在仓库根执行一次
+pnpm --filter @wowyuarm/dsh-channel-gateway typecheck  # tsc，strict
+pnpm --filter @wowyuarm/dsh-channel-gateway test       # 边界守卫 + vitest
+pnpm --filter @wowyuarm/dsh-channel-gateway build      # 产出 lib/
 ```
 
 `src/` 只允许 import 自己的相对模块、Node 内置模块，以及 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`；
-适配器可额外使用 `undici`。`npm run check:boundaries` 强制这条线，避免中立层悄悄长出宿主依赖。
+适配器可额外使用 `undici`。`pnpm --filter @wowyuarm/dsh-channel-gateway check:boundaries` 强制这条线，
+避免中立层悄悄长出宿主依赖。
 
 ## 许可
 
