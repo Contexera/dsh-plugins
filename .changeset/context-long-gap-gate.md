@@ -2,9 +2,9 @@
 "@wowyuarm/dsh-context-continuity": minor
 ---
 
-[中文](#cn-v0-1-7-gate) | [English](#en-v0-1-7-gate)
+[中文](#cn-v0-2-0-gate) | [English](#en-v0-2-0-gate)
 
-<h3 id="cn-v0-1-7-gate">中文</h3>
+<h3 id="cn-v0-2-0-gate">中文</h3>
 
 压力策略多了**第三条路**：长间隔相关性门控。隔了很久才回来、context 又还很大，宿主可以问一次 jev"这条输入和最近几轮接得上吗"；接不上就扣住这条输入、投一条**换代**指令，让模型写 handoff 并调 `context_rollover`，扣住的输入随新代交回。**没装 jev 就整条不启用，不是失败。**
 
@@ -70,7 +70,7 @@ jev 自己的重试预算是按后台调用定的（默认 30s × 3），而这�
 
 判据另有实测支撑：`SessionEvent.time` 见 `packages/core/session/src/types.ts:499`；pre-step 被拒也会落 `turn/end`（`packages/core/agent-loop/src/agent.ts` 的 `finally` 无条件 append，`reject` 走 `turnEnds = { kind: 'blocked' }`），所以兜底触发点确实可达；`Inbox.claim()` 先取 `next-step` 再取一条 `next-turn`，而 `steer` 投的正是 `next-step`（`agent-loop/src/inbox.ts:109`、`agent.ts:167`），所以指令那个 turn 会单独跑；可选 peer 不撞 release-age 门（本仓没有配 `minimumReleaseAge`），且 `check:peers` 只读 `@deepseek-ai/dsh-*`。
 
-<h3 id="en-v0-1-7-gate">English</h3>
+<h3 id="en-v0-2-0-gate">English</h3>
 
 The pressure policy gains a **third path**: the long-gap relatedness gate. When a subject comes back to a still-large context after a long absence, the host may ask its judge once whether the arriving input continues the recent work. If it does not, the input is kept and one **rollover** instruction takes its place — the model writes a handoff and calls `context_rollover`, and the kept input arrives with the next generation. **With no judge installed the whole gate stays off — that is a deployment, not a failure.**
 

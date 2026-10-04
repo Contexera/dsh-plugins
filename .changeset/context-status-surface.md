@@ -2,9 +2,9 @@
 "@wowyuarm/dsh-context-continuity": minor
 ---
 
-[中文](#cn-v0-1-7-status) | [English](#en-v0-1-7-status)
+[中文](#cn-v0-2-0-status) | [English](#en-v0-2-0-status)
 
-<h3 id="cn-v0-1-7-status">中文</h3>
+<h3 id="cn-v0-2-0-status">中文</h3>
 
 `context_timeline` 改名为 **`context_status`**：它不再只是"回看历史、挑一个返回点"，而是"读我现在站在哪、能做什么、代价多少"。同一个工具改名换描述，不新开一个。
 
@@ -31,7 +31,7 @@ Compact now: about 118K compactible; keeps the last ~33K verbatim
 
 **兼容性**
 
-- **工具名变了，这是宿主可见的破坏性改动。** 自己复制过 timeline 工具（例如 Agent Team）的宿主必须跟着改名：引擎自己的 `context_rollover` 描述现在指向 `context_status`，而模型手上那个工具还叫 `context_timeline`——描述与工具名对不上。0.x 下按 minor 计入 `0.1.7`。
+- **工具名变了，这是宿主可见的破坏性改动。** 自己复制过 timeline 工具（例如 Agent Team）的宿主必须跟着改名：引擎自己的 `context_rollover` 描述现在指向 `context_status`，而模型手上那个工具还叫 `context_timeline`——描述与工具名对不上。0.x 下按 minor 计入 `0.2.0`。
 - `ContinuityTools.timeline` → `ContinuityTools.status`：注册句柄跟着工具名走。`ContinuityToolAdapter.timeline()` **不变**——它读的仍是 timeline，只是由 `context_status` 渲染。
 - 宿主不供新数据时，除首行与新增的锚点计数行外，输出与 `0.1.6` 一致。
 
@@ -39,7 +39,7 @@ Compact now: about 118K compactible; keeps the last ~33K verbatim
 
 本地：`check:peers`、typecheck、boundaries、整仓 `-r test` / `-r typecheck` 全绿；本包 251/251（8 个文件，`context_compact` 那版是 241）。三条会变红的测试各做了一次变异验证：渲染丢掉组成行、`compactibleNow` 把"无法定价"当成 0、描述退回旧门句。
 
-<h3 id="en-v0-1-7-status">English</h3>
+<h3 id="en-v0-2-0-status">English</h3>
 
 `context_timeline` is renamed **`context_status`**: it no longer only means "look back and pick somewhere to return to", it means "read where I stand, what I can do, and what it costs". One tool renamed and reworded — not a second tool.
 
@@ -66,7 +66,7 @@ Compact now: about 118K compactible; keeps the last ~33K verbatim
 
 **Compatibility**
 
-- **The tool name changed, and that is a host-visible breaking change.** A host that keeps its own copy of the timeline tool (the Agent Team does) must follow the rename: the engine's own `context_rollover` description now points at `context_status`, while the tool the model can actually call is still named `context_timeline` — the prose and the roster disagree. At 0.x this rides `0.1.7` as a minor.
+- **The tool name changed, and that is a host-visible breaking change.** A host that keeps its own copy of the timeline tool (the Agent Team does) must follow the rename: the engine's own `context_rollover` description now points at `context_status`, while the tool the model can actually call is still named `context_timeline` — the prose and the roster disagree. At 0.x this rides `0.2.0` as a minor.
 - `ContinuityTools.timeline` → `ContinuityTools.status`: the registration handle follows the tool name. `ContinuityToolAdapter.timeline()` is **unchanged** — it still reads the timeline; `context_status` merely renders it.
 - A host that supplies neither new field sees the `0.1.6` output apart from the first line and the new anchor-count line.
 

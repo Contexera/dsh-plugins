@@ -2,9 +2,9 @@
 "@wowyuarm/dsh-context-continuity": minor
 ---
 
-[中文](#cn-v0-1-7) | [English](#en-v0-1-7)
+[中文](#cn-v0-2-0) | [English](#en-v0-2-0)
 
-<h3 id="cn-v0-1-7">中文</h3>
+<h3 id="cn-v0-2-0">中文</h3>
 
 新增第四个模型可见工具 `context_compact`：**在当前 Session 内**就地压短上下文。
 
@@ -17,13 +17,13 @@
 
 **兼容性**
 
-`ContinuityToolAdapter` 新增**必填**成员 `compactionFor(agent)`，返回该 agent 所在 scope 的 `{ engine, meter?, retainTokens? }` 或 `undefined`（返回 `undefined` 即可保持今天的行为）。寻址是宿主的事：预设经 `isolate` 挂载的服务读不到 `ctx.get('compaction')`。0.x 下按 minor 升到 `0.1.7`。新增 peer `@deepseek-ai/dsh-compaction`（`>=0.2.0-rc.1 <0.2.1`），与其余 DSH peer 同线。
+`ContinuityToolAdapter` 新增**必填**成员 `compactionFor(agent)`，返回该 agent 所在 scope 的 `{ engine, meter?, retainTokens? }` 或 `undefined`（返回 `undefined` 即可保持今天的行为）。寻址是宿主的事：预设经 `isolate` 挂载的服务读不到 `ctx.get('compaction')`。0.x 下按 minor 升到 `0.2.0`。新增 peer `@deepseek-ai/dsh-compaction`（`>=0.2.0-rc.1 <0.2.1`），与其余 DSH peer 同线。
 
 **验证**
 
 本地：`check:peers`、typecheck、boundaries、241/241 测试（8 个文件，含新增的 `compaction.spec.ts` 15 例与工具侧 8 例）全绿。选区间用真实 Session surface 断言，三条边界（不从 system 起压、不吞最新指令、配对退让）各做了一次变异验证：把对应实现改坏，测试确实变红。
 
-<h3 id="en-v0-1-7">English</h3>
+<h3 id="en-v0-2-0">English</h3>
 
 Adds a fourth model-facing tool, `context_compact`: shorten the context **in place, inside the current Session**.
 
@@ -36,7 +36,7 @@ Adds a fourth model-facing tool, `context_compact`: shorten the context **in pla
 
 **Compatibility**
 
-`ContinuityToolAdapter` gains a **required** member, `compactionFor(agent)`, returning that agent's scope as `{ engine, meter?, retainTokens? }` or `undefined` (returning `undefined` preserves today's behavior). Resolving it is the host's job: a service a preset mounted behind `isolate` is not visible to `ctx.get('compaction')`. At 0.x this is a minor bump to `0.1.7`. New peer `@deepseek-ai/dsh-compaction` (`>=0.2.0-rc.1 <0.2.1`), on the same line as the other DSH peers.
+`ContinuityToolAdapter` gains a **required** member, `compactionFor(agent)`, returning that agent's scope as `{ engine, meter?, retainTokens? }` or `undefined` (returning `undefined` preserves today's behavior). Resolving it is the host's job: a service a preset mounted behind `isolate` is not visible to `ctx.get('compaction')`. At 0.x this is a minor bump to `0.2.0`. New peer `@deepseek-ai/dsh-compaction` (`>=0.2.0-rc.1 <0.2.1`), on the same line as the other DSH peers.
 
 **Verification**
 
