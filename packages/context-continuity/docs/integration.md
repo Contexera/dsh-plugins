@@ -540,8 +540,10 @@ const decision = await pressure.onPreStep(member, signal)   // continue | notice
 A subject that comes back to a large context after a long absence is usually
 starting new work, and the old context is dead weight it pays for on every step.
 The gate asks a judge once whether the arriving input continues the recent work.
-Two optional host members switch it on; omit either and the gate stays off,
-which is a supported deployment and never a failure.
+An unrelated answer holds the step and steers one instruction to roll over, so
+the work continues in a fresh generation seeded by a handoff written for that
+input. Two optional host members switch the gate on; omit either and the gate
+stays off, which is a supported deployment and never a failure.
 
 ```ts
 import { ContextPressurePolicy, DEFAULT_GATE_TOKENS } from '@wowyuarm/dsh-context-continuity'
@@ -553,7 +555,7 @@ const pressure = new ContextPressurePolicy<MemberId>({
     recent: recentUserInputsOf(member),       // oldest first
   }),
   judgeFor: member => ctx.jev,                // anything with decide(request)
-}, { compactToolName: 'context_compact' }, { tokens: DEFAULT_GATE_TOKENS })
+}, {}, { tokens: DEFAULT_GATE_TOKENS })
 
 const decision = await pressure.onPreStep(member, signal)   // continue | notice | hold | reject
 if (decision.kind === 'hold') {
@@ -565,18 +567,38 @@ if (decision.kind === 'hold') {
 - **`hold` is its own decision.** It says the input this step claimed is kept, so
   the host preserves it; `reject` says the step cannot run and has nothing to
   keep, which is what the hard limit returns. Do not treat them alike.
-- **Arming and capturing are one call.** `holdClaimedInput` arms the same-generation
-  gate and keeps the messages in one step, because a capture taken before the gate
-  is armed keeps nothing.
-- **The gate is also the admission gate.** While a hold is armed,
-  `needsAdmissionGate` is true for that Agent, so no later step opens behind it.
-- **The host owns the exit, and there is exactly one.** At the end of the held
-  turn — whether or not the compaction happened — call
-  `pressure.releaseHold(member)` for the verdict and
-  `coordinator.releaseHeldInput(agent)` for the kept messages, then deliver them.
-  A hold that is never released rejects every later step: nothing else clears it,
-  and an unrecorded hold is reported as *not* reduced rather than assumed
-  successful.
+- **Arming and capturing are one call.** `holdClaimedInput` arms the hold and
+  keeps the messages in one step, because a capture taken before the hold is
+  armed keeps nothing.
+- **The gate is also the admission gate, and only for the held turn.** While a
+  hold is armed, `needsAdmissionGate` is true for that Agent and `isHoldingInput`
+  reports the same fact. The arm has to be gone by the time the instruction's own
+  turn reaches your pre-step: a host that checks the gate before its pressure
+  policy — the shipped Team wiring does — would otherwise reject the one turn that
+  carries the instruction, and the instruction would never reach a model.
+- **The remedy needs no compaction engine.** The instruction asks for a fresh
+  generation, so a scope that could never shorten a context in place is exactly
+  the scope this gate is for, and `compactionFor` is not consulted.
+- **The instruction quotes the held input back.** The input is held precisely so
+  that it opens no step, which leaves the model writing the handoff blind to the
+  request the handoff is for. The instruction therefore quotes that input (its
+  first 4000 characters) and names `rolloverToolName`.
+- **The coordinator owns both ways out; the host owns neither.** There is no host
+  call to release a hold: releasing stays internal so a host cannot strand one.
+  - *The rollover.* The instruction is steered as a next-step message, so the
+    driver opens one turn with it as its only input — the model's chance to write
+    the handoff. A rollover whose result lands durably in that turn (or that is
+    already pending when the held turn ends) is the input's first exit: the swap
+    carries it into the new generation as `carriedInput`.
+  - *No rollover.* Otherwise the coordinator hands the kept input back as the
+    next turn's input and logs that the requested rollover did not happen. That
+    delivery waits for the driver to converge, which is what lets the
+    instruction's turn run to itself first, and it re-checks for a rollover at
+    that moment rather than at the turn end — so a model that rolls over during
+    the instruction turn still gets the input through the swap.
+  - Either way the hold itself is dropped at the end of the held turn, and the
+    input is kept exactly once. Treat a rollover as landed only when its result is
+    durable, which is what `isTransitioning` reports.
 - **The gap is measured from the log, not from memory.** The engine reads the
   newest event's own timestamp, so a restart cannot look like a half-hour
   absence, and a generation with no event at all has no measurable gap and is
@@ -586,9 +608,9 @@ if (decision.kind === 'hold') {
   engine stops waiting at the same instant whether or not the judge honours it —
   this call sits on the path that starts a turn.
 - **Every ungated outcome is recorded.** Related, undecided, timed out, failed,
-  malformed, no judge, no compaction capability: the step continues and the
-  reason is logged. A gate that decided not to compact is never silently
-  indistinguishable from one that never ran.
+  malformed, no judge: the step continues and the reason is logged. A gate that
+  decided not to roll over is never silently indistinguishable from one that
+  never ran.
 - **The thresholds are defaults, not policy.** `DEFAULT_GATE_TOKENS` and
   `DEFAULT_GATE_IDLE_MS` are exported; the third constructor argument overrides
   them per policy.

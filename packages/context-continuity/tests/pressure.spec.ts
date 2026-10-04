@@ -14,10 +14,11 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE, type UserMessage } from '@deepseek-ai/dsh
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { JevRequest, JevResult } from '@wowyuarm/dsh-jev'
 import {
-  COMPACTION_INSTRUCTION_SUMMARY,
   ContextPressurePolicy,
   PRESSURE_NOTICE_SUMMARY,
+  ROLLOVER_INSTRUCTION_SUMMARY,
   contextPressureNoticeText,
+  rolloverInstructionText,
   type PressureCompaction,
   type PressureGate,
   type PressureInHand,
@@ -612,18 +613,19 @@ describe('the long-gap relatedness gate', () => {
     return host
   }
 
-  it('an unrelated input after a long gap holds the step and steers one compaction instruction', async () => {
+  it('an unrelated input after a long gap holds the step and steers one rollover instruction', async () => {
     const host = gated()
     const decision = await policyFor(host).onPreStep('subject-1', signal())
     expect(decision.kind).toBe('hold')
     expect(host.judgeCalls).toHaveLength(1)
     expect(host.steered).toHaveLength(1)
     const instruction = host.steered[0]!
-    expect(instruction.source).toMatchObject({ kind: PLUGIN_ID, summary: COMPACTION_INSTRUCTION_SUMMARY })
-    // The model is told the tool to call, and that its own input is not lost.
-    expect(noticeText(instruction)).toContain('context_compact')
-    expect(noticeText(instruction)).toContain('held, not lost')
-    expect(host.logs.some(entry => entry.message.includes('the step is held'))).toBe(true)
+    expect(instruction.source).toMatchObject({ kind: PLUGIN_ID, summary: ROLLOVER_INSTRUCTION_SUMMARY })
+    // The model is told which tool ends this generation, and — because its own
+    // input was held and so opens no step — what that input actually said.
+    expect(noticeText(instruction)).toContain('context_rollover')
+    expect(noticeText(instruction)).toContain('what is the status of the release?')
+    expect(host.logs.some(entry => entry.message.includes('the step is held for one rollover'))).toBe(true)
   })
 
   it('the question carries the input and the recent requests, and its own deadline', async () => {
@@ -651,7 +653,7 @@ describe('the long-gap relatedness gate', () => {
     ['the judge is undecided', 0.5, 'did not settle'],
     ['the judge fails', 'throws' as const, 'did not answer'],
     ['the answer is not a yes/no', 'malformed' as const, 'no yes/no probability'],
-  ])('when %s the step continues without compacting, and is recorded', async (_name, judge, expected) => {
+  ])('when %s the step continues without a rollover, and is recorded', async (_name, judge, expected) => {
     const host = gated({ judge: judge as number })
     const decision = await policyFor(host).onPreStep('subject-1', signal())
     expect(decision.kind).toBe('continue')
@@ -687,12 +689,15 @@ describe('the long-gap relatedness gate', () => {
     expect(decision.kind).toBe('hold')
   })
 
-  it('a scope that cannot compact is never told to, whatever the judge says', async () => {
+  it('a scope with no compaction engine still holds the step: the rollover needs none', async () => {
     const host = gated()
     host.compaction = undefined
     const decision = await policyFor(host).onPreStep('subject-1', signal())
-    expect(decision.kind).toBe('continue')
-    expect(host.steered).toEqual([])
+    expect(decision.kind).toBe('hold')
+    expect(noticeText(host.steered[0]!)).toContain('context_rollover')
+    // The remedy is a fresh generation, so a scope that could never compact in
+    // place is exactly the scope this gate is for.
+    expect(noticeText(host.steered[0]!)).not.toContain('context_compact')
   })
 
   it('a generation with no durable event has an unmeasurable gap, and is not held', async () => {
@@ -738,7 +743,6 @@ describe('the long-gap relatedness gate', () => {
     const decision = await policy.onPreStep('subject-1', signal())
     expect(decision.kind).toBe('continue')
     expect(host.logs.some(entry => entry.message.includes('the step was not held'))).toBe(true)
-    expect(policy.releaseHold('subject-1')).toBeUndefined()
   })
 
   it('a step already at the hard limit is reduced, never gated', async () => {
@@ -749,25 +753,41 @@ describe('the long-gap relatedness gate', () => {
     expect(host.judgeCalls).toEqual([])
   })
 
-  it('releasing a hold reports whether the reduction was measured', async () => {
-    const host = gated()
-    const policy = policyFor(host)
-    await policy.onPreStep('subject-1', signal())
-    // The compaction the instruction asked for landed on the durable surface.
-    host.surface = { ...host.surface, tokens: (host.surface.tokens ?? 0) - 40_000 }
-    expect(policy.releaseHold('subject-1')).toEqual({ reduced: true })
-    // One hold, one release: a second call has nothing left to release.
-    expect(policy.releaseHold('subject-1')).toBeUndefined()
-  })
-
-  it('releasing a hold whose compaction never happened reports that plainly', async () => {
-    const host = gated()
-    const policy = policyFor(host)
-    await policy.onPreStep('subject-1', signal())
-    expect(policy.releaseHold('subject-1')).toEqual({ reduced: false })
-  })
-
   it('the instruction summary is frozen to the value it ships with', () => {
-    expect(COMPACTION_INSTRUCTION_SUMMARY).toBe('Context pressure: compact before continuing')
+    expect(ROLLOVER_INSTRUCTION_SUMMARY).toBe('Context pressure: roll over before continuing')
+  })
+})
+
+describe('the rollover instruction text', () => {
+  const input = { usageTokens: 150_000, idleMs: 45 * 60_000, held: 'what is the status of the release?' }
+
+  it('quotes the held request back, names the tool, and promises the request arrives', () => {
+    const text = rolloverInstructionText(input)
+    expect(text).toContain('what is the status of the release?')
+    expect(text).toContain('context_rollover')
+    expect(text).toContain('45 minutes away')
+    expect(text).toContain('150000 tokens')
+    expect(text).toContain('external side effects')
+    expect(text).toContain('private memory/notes')
+    // Both ways out are stated, so a model that declines to switch still knows
+    // its request was kept rather than dropped.
+    expect(text).toContain('as soon as this turn ends either way')
+  })
+
+  it('never names the in-place compaction tool: this remedy is a fresh generation', () => {
+    expect(rolloverInstructionText(input)).not.toContain('context_compact')
+  })
+
+  it('host wording renames the tool without changing the substance', () => {
+    const text = rolloverInstructionText(input, { rolloverToolName: 'new_context' })
+    expect(text).toContain('new_context')
+    expect(text).not.toContain('context_rollover')
+    expect(text).toContain('what is the status of the release?')
+  })
+
+  it('quotes a bounded slice of a very long request rather than all of it', () => {
+    const text = rolloverInstructionText({ ...input, held: 'x'.repeat(10_000) })
+    expect(text).toContain('x'.repeat(4_000))
+    expect(text).not.toContain('x'.repeat(4_001))
   })
 })

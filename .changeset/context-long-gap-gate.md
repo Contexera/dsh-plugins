@@ -6,7 +6,7 @@
 
 <h3 id="cn-v0-1-7-gate">中文</h3>
 
-压力策略多了**第三条路**：长间隔相关性门控。隔了很久才回来、context 又还很大，宿主可以问一次 jev"这条输入和最近几轮接得上吗"；接不上就扣住这条输入、投一条压缩指令，让模型先压，压完把输入还回去。**没装 jev 就整条不启用，不是失败。**
+压力策略多了**第三条路**：长间隔相关性门控。隔了很久才回来、context 又还很大，宿主可以问一次 jev"这条输入和最近几轮接得上吗"；接不上就扣住这条输入、投一条**换代**指令，让模型写 handoff 并调 `context_rollover`，扣住的输入随新代交回。**没装 jev 就整条不启用，不是失败。**
 
 **新的 pre-step 决策：`hold`**
 
@@ -23,18 +23,23 @@ judgeFor: member => ctx.jev,   // 任何有 decide(request) 的东西
 
 `relatednessFor` 只能宿主给：这一步正在认领的 messages 是宿主自己的 `agent/pre-step` 入参。引擎负责问什么、怎么读答案——那是策略，不是传输。
 
-**扣件：同代内的第二个 latch**
+**remedy 是换代，不需要压缩引擎**
 
-`ContextContinuityCoordinator` 新增压缩挂起状态，与换代的 latch 并列：
+指令让模型写 handoff 并调 `context_rollover`，因此**这个 scope 压不了 context 完全不是障碍**——压不动的 scope 恰恰是这条门控要照顾的。`compactionFor` 在这条路上不被查询；`releaseHold(subject)` 与 `PressureHoldOutcome` 随之删掉：换代路径上"压到了没有"这个判据没有意义。
+
+**指令必须把扣住的输入引回去**
+
+输入被扣住，就是为了让它开不出 step——代价是写 handoff 的模型**看不到这条请求**。handoff 是下一代的全部种子，种子里没有下一次请求，是这条 remedy 唯一可能比就地压缩更差的地方。所以指令引用扣住输入的原文（截前 4000 字符），并点名 `rolloverToolName`。
+
+**扣件：与换代 latch 并列的第二个 latch**
+
+`ContextContinuityCoordinator` 新增挂起状态：
 
 - `holdClaimedInput(agent, messages)` —— **武装与扣留是一次调用**。捕获在没有 latch 时会被拒，所以分两次、顺序反了，丢的正好是这条 latch 要保的那条输入。
-- `needsAdmissionGate(agent)` 现在对挂起也返回真：挂着的时候不能有后续 step 开起来。
-- `releaseHeldInput(agent)` —— 唯一的出口，返回扣住的输入。宿主在**那一 turn 结束时**调用，压没压成都要调：**一直不解的挂起会拒掉之后每一步**。
-- 换代照旧扣件复用：换代落地时挂起被清掉，扣住的输入随 `carriedInput` 进新代。
-
-**判决归策略**
-
-`releaseHold(subject)` 返回 `{ reduced }`：策略在扣住时记下 `surfaceFor`，释放时用与硬上限**同一套** `reductionProven` 判断。宿主不必自己重算证明。没记到挂起时返回 `undefined`，并且按"没测到"报，不按"成功"报。
+- `needsAdmissionGate(agent)` 现在对挂起也返回真：挂着的时候不能有后续 step 开起来。`isHoldingInput(agent)` 单独报告同一件事。
+- **两个出口都由 coordinator 自己拥有，宿主一个都不用管。** 指令是作为 next-step 消息投进去的，所以 driver 会**单独**为它开一个 turn——那是模型写 handoff 的机会。一是换代落地（在那个 turn 里落地，或扣住的 turn 结束时已在飞）：挂起被清掉，扣住的输入随 `carriedInput` 进新代。二是没有换代：coordinator 把扣住的输入原样投回，并记一条"请求的换代没有发生"；投递等 driver 收敛，所以指令那个 turn 先独占跑完，而判据在**投递那一刻**再查一次——模型在指令 turn 里换代了，输入照样走换代。判据就是"有没有成功的 `context_rollover` 结果落地"（`isTransitioning` 报的就是它），不做 surface 前后比较。
+- **挂起只覆盖被扣的那个 turn。** 这一点是硬的：宿主如果在压力策略**之前**查 `needsAdmissionGate`（Team 现有接线就是这么查的），挂起活过那个 turn 就会把唯一携带指令的 turn 也拒掉，指令永远到不了模型。所以挂起在扣住的那个 turn 结束时就被丢掉，输入仍只投一次。
+- 因此 `releaseHeldInput` 从公开面撤掉，改成内部。前一版设计要求宿主在 turn 结束时手动释放，**忘了释放就会拒掉之后每一步**——那个硬风险现在不存在了。
 
 **超时是自己兜的**
 
@@ -44,9 +49,9 @@ jev 自己的重试预算是按后台调用定的（默认 30s × 3），而这�
 
 `SessionEvent.time` 是 Unix epoch 毫秒，引擎直接读 span 最新事件的时间。这样重启不会被当成半小时空档；整段没有事件时"测不出间隔"不算长间隔，门控不开。
 
-**没压成的每一种都记一条**
+**没换代的每一种都记一条**
 
-接得上 / 判不出 / 超时 / 报错 / 答案不成形 / 没装 judge / 这个 scope 压不了：都照常继续，**并且各记一条**。门控决定不压，与门控根本没跑，不能长得一样。
+接得上 / 判不出 / 超时 / 报错 / 答案不成形 / 没装 judge：都照常继续，**并且各记一条**。门控决定不换代，与门控根本没跑，不能长得一样。
 
 **依赖形状**
 
@@ -58,11 +63,13 @@ jev 自己的重试预算是按后台调用定的（默认 30s × 3），而这�
 
 **验证**
 
-本地：`check:peers`、typecheck、boundaries、整仓 `-r test` / `-r typecheck` / `-r build` 全绿；本包 **279/279**（8 个文件，上一版 251），新增 28 条。五条会变红的测试各做了一次变异验证，五条都确实变红：捕获守卫退回只认换代、`needsAdmissionGate` 忘掉挂起、间隔下限不生效、释放永远声称压过、judge 调用不走自己的 deadline。判据另有实测支撑：`SessionEvent.time` 见 `packages/core/session/src/types.ts:499`；可选 peer 不撞 release-age 门（本仓没有配 `minimumReleaseAge`），且 `check:peers` 只读 `@deepseek-ai/dsh-*`。
+本地：`check:peers`、typecheck、boundaries、整仓 `-r test` / `-r typecheck` / `-r build` 全绿；本包 **286/286**（8 个文件，上一版 279）。八条会变红的测试各做了一次变异验证，八条都确实变红：捕获守卫退回只认换代、`needsAdmissionGate` 忘掉挂起、turn 结束的兜底不投回、换代在飞时兜底也投回、投递时不再查换代、间隔下限不生效、指令不再引用扣住的输入、judge 调用不走自己的 deadline。第四条一开始**没被抓到**——当时没有测试覆盖"换代已排定但还没落地时又来了一个 turn 结束"，补了那条测试之后才变红。
+
+判据另有实测支撑：`SessionEvent.time` 见 `packages/core/session/src/types.ts:499`；pre-step 被拒也会落 `turn/end`（`packages/core/agent-loop/src/agent.ts` 的 `finally` 无条件 append，`reject` 走 `turnEnds = { kind: 'blocked' }`），所以兜底触发点确实可达；`Inbox.claim()` 先取 `next-step` 再取一条 `next-turn`，而 `steer` 投的正是 `next-step`（`agent-loop/src/inbox.ts:109`、`agent.ts:167`），所以指令那个 turn 会单独跑；可选 peer 不撞 release-age 门（本仓没有配 `minimumReleaseAge`），且 `check:peers` 只读 `@deepseek-ai/dsh-*`。
 
 <h3 id="en-v0-1-7-gate">English</h3>
 
-The pressure policy gains a **third path**: the long-gap relatedness gate. When a subject comes back to a still-large context after a long absence, the host may ask its judge once whether the arriving input continues the recent work. If it does not, the input is kept, one compaction instruction takes its place, and the input is handed back once the compaction is done. **With no judge installed the whole gate stays off — that is a deployment, not a failure.**
+The pressure policy gains a **third path**: the long-gap relatedness gate. When a subject comes back to a still-large context after a long absence, the host may ask its judge once whether the arriving input continues the recent work. If it does not, the input is kept and one **rollover** instruction takes its place — the model writes a handoff and calls `context_rollover`, and the kept input arrives with the next generation. **With no judge installed the whole gate stays off — that is a deployment, not a failure.**
 
 **A new pre-step decision: `hold`**
 
@@ -79,18 +86,23 @@ judgeFor: member => ctx.jev,   // anything with decide(request)
 
 Only a host can answer `relatednessFor`: the messages this step is admitting are its own `agent/pre-step` argument. What to ask and how to read the answer is the engine's, because that is policy rather than transport.
 
-**The hold: a second latch, in the same generation**
+**The remedy is a rollover, and it needs no compaction engine**
 
-`ContextContinuityCoordinator` gains compaction-hold state beside the rollover latch:
+The instruction asks for a handoff and a `context_rollover`, so a scope that cannot shorten its context in place is **no obstacle at all** — it is exactly the scope this gate is for. `compactionFor` is not consulted on this path, and `releaseHold(subject)` with `PressureHoldOutcome` are gone: on a rollover path, *did the reduction happen* is not a question with a meaning.
+
+**The instruction must quote the held input back**
+
+The input is held precisely so that it opens no step, and the price is that the model writing the handoff **cannot see the request the handoff is for**. The handoff is the whole seed of the next generation, and a seed written without knowing what arrives next is the one way this remedy can come out worse than compacting in place. The instruction therefore quotes the held input (its first 4000 characters) and names `rolloverToolName`.
+
+**The hold: a second latch, beside the rollover latch**
+
+`ContextContinuityCoordinator` gains held-step state:
 
 - `holdClaimedInput(agent, messages)` — **arming and capturing are one call.** The capture is refused while no latch is armed, so doing these as two calls in the other order drops exactly the input the latch exists to preserve.
-- `needsAdmissionGate(agent)` is now true for a hold too: nothing may open a step behind it.
-- `releaseHeldInput(agent)` — the one exit, returning the kept input. The host calls it at the end of that turn whether or not the compaction happened: **a hold that is never released rejects every later step.**
-- Rollover reuses the same capture: a swap clears the hold and carries the kept input into the new generation as `carriedInput`.
-
-**The verdict belongs to the policy**
-
-`releaseHold(subject)` returns `{ reduced }`: the policy records `surfaceFor` when it holds, and releases through the same `reductionProven` the hard limit uses. A host does not re-derive the proof. With no hold recorded it returns `undefined`, and reports *not measured* rather than assuming success.
+- `needsAdmissionGate(agent)` is now true for a hold too: nothing may open a step behind it. `isHoldingInput(agent)` reports the same fact on its own.
+- **Both exits belong to the coordinator, and the host owns neither.** The instruction is steered as a next-step message, so the driver opens **one turn for it alone** — the model's chance to write the handoff. The first exit is a rollover landing (in that turn, or already in flight when the held turn ends): the hold is cleared and the kept input travels into the new generation as `carriedInput`. The second is no rollover: the coordinator hands the kept input back itself and logs that the requested rollover did not happen; that delivery waits for the driver to converge, so the instruction's turn runs to itself first, and the test is re-applied **at delivery time** — a model that rolls over during the instruction turn still gets the input through the swap. The judgement is *did a successful `context_rollover` result land* — which is what `isTransitioning` reports — with no before/after surface comparison.
+- **The hold covers the held turn only.** This one is load-bearing: a host that checks `needsAdmissionGate` **before** its pressure policy — which is what the Team wiring does today — would reject the one turn carrying the instruction if the hold outlived the held turn, and the instruction would never reach a model. The hold is therefore dropped when the held turn ends, and the input is still delivered exactly once.
+- `releaseHeldInput` therefore leaves the public surface and becomes internal. The earlier design asked the host to release the hold at the end of the turn, and **a host that forgot rejected every later step**; that hard risk is now gone.
 
 **The deadline is the engine's own**
 
@@ -102,7 +114,7 @@ The judge's retry budget is sized for a background call (30s × 3 by default), a
 
 **Every ungated outcome is recorded**
 
-Related, undecided, timed out, failed, malformed answer, no judge, no compaction capability in scope: the step continues as usual, and **each is logged**. A gate that decided not to compact must not look like one that never ran.
+Related, undecided, timed out, failed, malformed answer, no judge: the step continues as usual, and **each is logged**. A gate that decided not to roll over must not look like one that never ran.
 
 **Dependency shape**
 
@@ -114,4 +126,6 @@ Related, undecided, timed out, failed, malformed answer, no judge, no compaction
 
 **Verification**
 
-Local: `check:peers`, typecheck, boundaries, and repository-wide `-r test` / `-r typecheck` / `-r build` all green; **279/279** tests in this package (8 files; 251 before), 28 of them new. Five tests that can go red were mutation-checked, and all five went red: reverting the capture guard to rollover-only, dropping the hold from `needsAdmissionGate`, disabling the idle floor, claiming every released hold was reduced, and awaiting the judge without the policy deadline. Two judgements were verified rather than assumed: `SessionEvent.time` at `packages/core/session/src/types.ts:499`, and that the optional peer does not trip the release-age gate (no `minimumReleaseAge` is configured here) while `check:peers` reads only `@deepseek-ai/dsh-*`.
+Local: `check:peers`, typecheck, boundaries, and repository-wide `-r test` / `-r typecheck` / `-r build` all green; **286/286** tests in this package (8 files; 279 before). Eight tests that can go red were mutation-checked, and all eight went red: reverting the capture guard to rollover-only, dropping the hold from `needsAdmissionGate`, a turn-end fallback that never delivers, a fallback that also fires while a rollover is in flight, a delivery that stops re-checking for a rollover, disabling the idle floor, an instruction that stops quoting the held input, and awaiting the judge without the policy deadline. The fourth was **not** caught at first — nothing covered a second turn end arriving after the swap was scheduled but before it landed — and only went red once that test was added.
+
+Three judgements were verified rather than assumed: `SessionEvent.time` at `packages/core/session/src/types.ts:499`; that a rejected pre-step still appends `turn/end` (the `finally` in `packages/core/agent-loop/src/agent.ts` appends it unconditionally, with `reject` leaving `turnEnds = { kind: 'blocked' }`), so the fallback's trigger is genuinely reachable; and that the instruction's turn runs alone, because `Inbox.claim()` takes `next-step` before a `next-turn` message and `steer` targets `next-step` (`agent-loop/src/inbox.ts:109`, `agent.ts:167`). The optional peer does not trip the release-age gate (no `minimumReleaseAge` is configured here) while `check:peers` reads only `@deepseek-ai/dsh-*`.

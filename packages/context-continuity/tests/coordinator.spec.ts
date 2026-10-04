@@ -479,8 +479,8 @@ describe('lifecycle', () => {
   })
 })
 
-describe('same-generation compaction hold', () => {
-  it('an armed hold admits nothing, and releasing it returns the input it kept', () => {
+describe('held step: the rollover answers it, or the turn end hands the input back', () => {
+  it('an armed hold admits nothing until a turn ends without the rollover', async () => {
     const test = harness()
     const input = external('what is the status of the release?')
     expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
@@ -489,54 +489,118 @@ describe('same-generation compaction hold', () => {
     expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(true)
     expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(true)
 
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([input])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([input])
     expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
     expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
-    // One hold, one release: the input is returned exactly once.
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([])
   })
 
-  it('arming and capturing are one call, because a capture taken first keeps nothing', () => {
+  it('hands the input back exactly once, however many turns end', async () => {
+    const test = harness()
+    const input = external('continue')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(21))
+    await settle()
+    expect(test.agent.followups).toEqual([input])
+  })
+
+  it('hands the input to a rollover that lands while the fallback is still waiting', async () => {
+    const test = harness()
+    const input = external('held across the swap')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.agent.holdIdle()
+    // The held turn ends, so the fallback is scheduled but cannot deliver yet.
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    // The turn the fallback answers is the one that got the instruction, and in
+    // it the model did roll over.
+    test.armIntent({ resultSeq: 12 })
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(21))
+    test.agent.goIdle()
+    await settle()
+    expect(test.plans).toHaveLength(1)
+    expect(test.plans[0]!.carriedInput).toEqual([input])
+    expect(test.agent.followups).toEqual([])
+  })
+
+  it('says in the log that the rollover did not happen', async () => {
+    const test = harness()
+    test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.logs.join('\n')).toContain('the requested rollover did not happen')
+  })
+
+  it('waits for true idle before queueing the returned input as the next turn', async () => {
+    const test = harness()
+    const input = external('held while the driver converges')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.agent.holdIdle()
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([])
+
+    test.agent.goIdle()
+    await settle()
+    expect(test.agent.followups).toEqual([input])
+  })
+
+  it('arming and capturing are one call, because a capture taken first keeps nothing', async () => {
     const test = harness()
     const input = external('continue')
     // The capture is refused while no hold is armed, which is why the hold and
     // the capture cannot be two host calls in the other order.
     expect(test.coordinator.captureClaimedInput(test.asAgent, [input])).toEqual([])
     test.coordinator.holdClaimedInput(test.asAgent, [input])
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([input])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([input])
   })
 
-  it('keeps several claimed messages in the order they were claimed', () => {
+  it('keeps several claimed messages in the order they were claimed', async () => {
     const test = harness()
     const first = external('first')
     const second = external('second')
     test.coordinator.holdClaimedInput(test.asAgent, [first])
     test.coordinator.holdClaimedInput(test.asAgent, [second])
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([first, second])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([first, second])
   })
 
-  it('drains the inbox into the hold too, so nothing opens a step behind it', () => {
+  it('drains the inbox into the hold too, so nothing opens a step behind it', async () => {
     const test = harness()
     const queued = external('queued while held')
     test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
     test.agent.inbox.nextTurn.push(queued)
     expect(test.coordinator.captureQueuedInput(test.asAgent)).toEqual([queued])
     expect(test.agent.inbox.nextTurn).toEqual([])
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toHaveLength(2)
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toHaveLength(2)
   })
 
-  it('drops an ephemeral notice while holding, exactly as it does at a rollover', () => {
+  it('drops an ephemeral notice while holding, exactly as it does at a rollover', async () => {
     const test = harness()
     const kept = external('real input')
     const dropped = notice('domain notice')
     expect(test.coordinator.holdClaimedInput(test.asAgent, [dropped, kept])).toEqual([kept])
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([kept])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([kept])
   })
 
-  it('returns nothing for an Agent that holds nothing', () => {
+  it('returns nothing for a turn that ends with no hold armed', async () => {
     const test = harness()
     expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
-    expect(test.coordinator.releaseHeldInput(test.asAgent)).toEqual([])
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([])
+    expect(test.logs).toEqual([])
   })
 
   it('a rollover answers the hold by carrying its input into the new generation', async () => {
@@ -550,9 +614,32 @@ describe('same-generation compaction hold', () => {
     await settle()
     expect(test.plans).toHaveLength(1)
     expect(test.plans[0]!.carriedInput).toEqual([input])
+    // The swap is the hold's other exit: the input travels with it, never as a
+    // follow-up into the generation the hold exists to leave behind.
+    expect(test.agent.followups).toEqual([])
     // The successor generation starts ungated: the hold was answered, not left armed.
     expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
     expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+  })
+
+  it('a turn ending while the swap is still in flight does not steal the held input', async () => {
+    const test = harness()
+    const input = external('held across the swap')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.armIntent({ resultSeq: 12 })
+    test.agent.holdIdle()
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    // The swap is scheduled but the driver has not converged. A second turn end
+    // must not hand the input to the generation the swap exists to leave behind.
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(21))
+    await settle()
+    expect(test.agent.followups).toEqual([])
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(true)
+
+    test.agent.goIdle()
+    await settle()
+    expect(test.plans).toHaveLength(1)
+    expect(test.plans[0]!.carriedInput).toEqual([input])
   })
 
   it('forgets one subject\'s hold when its bookkeeping is dropped', () => {
@@ -563,7 +650,7 @@ describe('same-generation compaction hold', () => {
     expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
   })
 
-  it('a disposal releases every hold it was carrying', () => {
+  it('a disposal drops every hold it was carrying', () => {
     const test = harness()
     test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
     test.coordinator.dispose()

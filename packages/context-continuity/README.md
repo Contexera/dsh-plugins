@@ -43,9 +43,10 @@ every plugin that adopts this gives its agents the same set:
 - **pressure handling** — a heads-up when a Session is filling up, and a safe
   fallback at the limit, so the agent is never forced to switch at a bad moment.
   With the optional `@wowyuarm/dsh-jev` peer installed and a host that supplies
-  the view, a Session that is still large after a long absence is compacted
-  before the new request runs — and that request is handed straight back
-  afterwards, so nothing the human sent is lost.
+  the view, a Session that is still large after a long absence starts a fresh
+  generation before the new request runs: the request is quoted into the
+  instruction that asks for the handoff, and the request itself is handed over
+  either way, so nothing the human sent is lost.
 
 Two more are **opt-in** — the agent only gets them if you mount `createSearchTools`
 yourself:

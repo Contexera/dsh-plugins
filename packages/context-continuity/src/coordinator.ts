@@ -15,12 +15,13 @@
  * old-generation model request opens, and then defers to the host lifecycle
  * through {@link ContextContinuityHost.executeTransition}.
  *
- * The same capture serves a second, shorter-lived reason: a compaction hold. A
+ * The same capture serves a second, shorter-lived reason: a held step. A
  * pressure policy that answers `hold` rejected a step whose input is still
- * wanted, and that input has to come back once the compaction is done — or once
- * the turn ends without one. The hold is armed and released by the host
- * ({@link holdClaimedInput} / {@link releaseHeldInput}); this coordinator owns
- * only the latch that keeps the admission gate armed in between.
+ * wanted, pending the rollover that the instruction beside it asked for. The
+ * host arms the hold ({@link holdClaimedInput}); this coordinator owns the
+ * latch that keeps the admission gate armed for that turn, and both exits from
+ * it: a rollover carries the input into the next generation, and a turn that
+ * ends with no rollover hands the input back once the driver converges.
  * @module @wowyuarm/dsh-context-continuity/coordinator
  */
 
@@ -72,10 +73,13 @@ export class ContextContinuityCoordinator<SubjectId> {
   private readonly subjects = new Map<SubjectId, SubjectTransition>()
   private readonly capturedInput = new Map<SubjectId, readonly UserMessage[]>()
   /**
-   * The Agents holding input for a same-generation compaction. A pressure
-   * policy that answers `hold` rejected a step whose messages are still in
-   * flight; until the hold is released nothing may admit another, or the model
-   * would open a step against the context the hold exists to shrink.
+   * The Agents holding input for a requested rollover. A pressure policy that
+   * answers `hold` rejected a step whose messages are still in flight; while
+   * the hold is armed nothing may admit another, or the model would open a step
+   * against the context the hold exists to leave behind. The arm covers the
+   * held turn only — the instruction steered in the rejected step's place is
+   * the next thing the driver runs, and a host that checks the gate before its
+   * pressure policy must not reject that turn.
    */
   private readonly holds = new Map<SubjectId, Agent>()
   /** Per-subject latch for the in-process scheduling→delivery window. */
@@ -129,8 +133,8 @@ export class ContextContinuityCoordinator<SubjectId> {
    * generation activates mid-swap and must be free to consume the handoff and
    * carried input immediately.
    *
-   * A same-generation compaction hold arms the same gate for the same reason:
-   * the input that was kept has to be the input that comes back.
+   * A held step arms the same gate for the same reason: the input that was kept
+   * has to be the input that comes back — and, as above, only for the held turn.
    */
   needsAdmissionGate(agent: Agent): boolean {
     const id = this.host.subjectForAgent(agent)?.id
@@ -140,8 +144,8 @@ export class ContextContinuityCoordinator<SubjectId> {
   }
 
   /**
-   * Whether one Agent's subject is holding input for a same-generation
-   * compaction, and so admits no further step until the hold is released.
+   * Whether one Agent's subject is holding input for a requested rollover, and
+   * so admits no further step while its held turn is open.
    */
   isHoldingInput(agent: Agent): boolean {
     const id = this.host.subjectForAgent(agent)?.id
@@ -150,10 +154,10 @@ export class ContextContinuityCoordinator<SubjectId> {
   }
 
   /**
-   * Arm one subject's compaction hold and keep the messages its rejected step
-   * had already claimed. Arming and capturing are one call on purpose: the
-   * capture is refused while no hold is armed, so a host that did these in the
-   * other order would drop exactly the input the hold exists to preserve.
+   * Arm one subject's hold and keep the messages its rejected step had already
+   * claimed. Arming and capturing are one call on purpose: the capture is
+   * refused while no hold is armed, so a host that did these in the other order
+   * would drop exactly the input the hold exists to preserve.
    */
   holdClaimedInput(agent: Agent, messages: readonly UserMessage[]): readonly UserMessage[] {
     const id = this.host.subjectForAgent(agent)?.id
@@ -165,17 +169,41 @@ export class ContextContinuityCoordinator<SubjectId> {
   }
 
   /**
-   * End one subject's compaction hold and return the input it kept, for the host
-   * to deliver as the subject's next input. The host calls this at the end of
-   * the held turn whether or not the compaction happened — a hold that is never
-   * released rejects every later step, so this is the one exit.
+   * The hold's fallback exit: hand the input it kept back to the subject as its
+   * next turn's input, unchanged. A hold whose rollover never came would
+   * otherwise reject every later step for good. The hold is dropped before the
+   * drain, so a second turn end can never deliver the same input twice.
    */
-  releaseHeldInput(agent: Agent): readonly UserMessage[] {
-    const id = this.host.subjectForAgent(agent)?.id
-    if (id === undefined) return []
-    if (this.holds.get(id) !== agent) return []
+  private returnHeldInput(id: SubjectId, agent: Agent): void {
+    if (this.holds.get(id) !== agent) return
     this.holds.delete(id)
-    return this.drainCapturedInput(id)
+    const held = this.drainCapturedInput(id)
+    if (held.length === 0) return
+    // Wait for true idle, then queue the input as the next turn — the same
+    // discipline the rollover and continuation paths use: a next-turn message
+    // queued while the driver is still converging never latches a wake. Idle is
+    // also what makes this exit answer the right turn: the instruction steered
+    // in the held step's place is the only pending input, so the driver runs it
+    // before converging and the model gets that turn to itself.
+    void agent.whenIdle().then(() => {
+      if (this.disposed) return
+      // A rollover that landed while that turn ran is the input's other exit:
+      // it belongs to the swap, not to the generation the swap leaves behind.
+      if (this.subjects.has(id)) {
+        this.capturedInput.set(id, [...held, ...(this.capturedInput.get(id) ?? [])])
+        return
+      }
+      this.host.log(`the requested rollover did not happen; the held input is handed back unchanged (${held.length} message(s), subject ${String(id)})`)
+      for (const message of held) {
+        try {
+          agent.followup(message)
+        } catch (error) {
+          this.host.log(`held input delivery failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
+        }
+      }
+    }, error => {
+      this.host.log(`held input delivery failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
+    })
   }
 
   /**
@@ -218,7 +246,7 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Whether one Agent may have input kept for its subject: it holds the pending
-   * rollover, or the compaction hold, or both. Either arm means the input this
+   * rollover, or the held step, or both. Either arm means the input this
    * Agent was about to admit belongs to a context that must not run.
    */
   private capturesFor(id: SubjectId, agent: Agent): boolean {
@@ -267,22 +295,29 @@ export class ContextContinuityCoordinator<SubjectId> {
     // landing in the log.
     this.scheduleCheckpointContinuations(id, agent)
     const transition = this.subjects.get(id)
-    if (transition === undefined || transition.turnEnded) return
-    const subject = this.host.subjectForAgent(agent)
-    if (subject === undefined || transition.agent !== agent) return
-    transition.turnEnded = true
-    // Wait for true idle (the turn-end event fires before the driver fully
-    // converges), then perform the swap off the session-event dispatch path.
-    void agent.whenIdle().then(() => {
-      if (this.disposed) return
-      const current = this.subjects.get(id)
-      if (current === undefined || current !== transition) return
-      if (this.host.agentForSubject(id) !== agent) return
-      void this.performTransition(id, subject.sessionId, transition)
-    }, error => {
-      this.host.log(`context rollover idle wait failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
-      this.subjects.delete(id)
-    })
+    if (transition !== undefined && !transition.turnEnded) {
+      const subject = this.host.subjectForAgent(agent)
+      if (subject !== undefined && transition.agent === agent) {
+        transition.turnEnded = true
+        // Wait for true idle (the turn-end event fires before the driver fully
+        // converges), then perform the swap off the session-event dispatch path.
+        void agent.whenIdle().then(() => {
+          if (this.disposed) return
+          const current = this.subjects.get(id)
+          if (current === undefined || current !== transition) return
+          if (this.host.agentForSubject(id) !== agent) return
+          void this.performTransition(id, subject.sessionId, transition)
+        }, error => {
+          this.host.log(`context rollover idle wait failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
+          this.subjects.delete(id)
+        })
+        return
+      }
+    }
+    // A pending or in-flight rollover is the hold's other exit: it carries the
+    // captured input into the next generation itself.
+    if (this.subjects.has(id)) return
+    this.returnHeldInput(id, agent)
   }
 
   /**

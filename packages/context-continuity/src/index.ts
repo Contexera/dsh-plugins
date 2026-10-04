@@ -161,19 +161,18 @@ export type {
 } from './stored-session-reader.ts'
 
 export {
-  COMPACTION_INSTRUCTION_SUMMARY,
   DEFAULT_GATE_IDLE_MS,
   DEFAULT_GATE_JUDGE_TIMEOUT_MS,
   DEFAULT_GATE_TOKENS,
   PRESSURE_NOTICE_SUMMARY,
+  ROLLOVER_INSTRUCTION_SUMMARY,
   ContextPressurePolicy,
-  compactionInstructionText,
   contextPressureNoticeText,
+  rolloverInstructionText,
 } from './pressure.ts'
 export type {
   PressureCompaction,
   PressureGate,
-  PressureHoldOutcome,
   PressureInHand,
   PressureJudgement,
   PressureLimits,
