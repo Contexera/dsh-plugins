@@ -110,3 +110,27 @@ not an optional add-on. A consumer that only imported the engine and re-wrote th
 tools would duplicate the exact surface the plugin exists to standardize — so the
 tools ship from here, parameterized by prose, with the safety-bearing validation
 kept inside.
+
+## P8 — The engine may act on the subject's behalf when its own context is the problem
+
+Every other surface here answers a call: the model asks, the engine acts. The
+pressure policy is the exception, and it has to be. The failure it exists to
+prevent — a subject that runs out of context in the middle of its work — is the
+one the subject cannot ask about in time, so the engine reads the subject's own
+budget and surface and acts on them.
+
+What it may do is engine-owned: one notice per generation at the handoff budget,
+a *proven* reduction or a refusal at the hard limit, and — only when a host
+supplies both a relatedness view and a judge — holding one step after a long gap,
+so the work continues in a fresh generation instead of paying for a stale context
+on every later step. What the notice *calls* things is a host's vocabulary (its
+in-hand labels, its tool names). Its substance is not a knob: the measured
+numbers, the default action, and the instruction to record durable knowledge
+before switching are the engine's, because a subject that loses context without
+them has lost work.
+
+Two constraints keep this from becoming guesswork. An absent capability is never
+a failure: no meter, no compaction engine, no judge means the policy stays quiet,
+or refuses with a recoverable diagnostic, rather than inventing a substitute. And
+every decision *not* to act is recorded, so a policy that decided not to
+intervene is never indistinguishable from one that never ran.
