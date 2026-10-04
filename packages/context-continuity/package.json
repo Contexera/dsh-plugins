@@ -1,6 +1,6 @@
 {
   "name": "@wowyuarm/dsh-context-continuity",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A subject's context lived as one continuous timeline across many physical Sessions: rollover, checkpoints, and lineage.",
   "license": "MIT",
   "repository": {

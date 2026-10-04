@@ -1,5 +1,55 @@
 # @wowyuarm/dsh-context-continuity
 
+## 0.2.1
+
+### Patch Changes
+
+- [中文](#cn-v0-2-1-status-rows) | [English](#en-v0-2-1-status-rows)
+
+  <h3 id="cn-v0-2-1-status-rows">中文</h3>
+
+  DSH 线不变，仍是 `>=0.2.0-rc.1 <0.2.1`。这一版只动 `context_status` 的锚点表：只差 anchor 摘要的相邻行合成一行。
+
+  **改了什么**
+
+  - **`context_status` 的锚点表把只差 anchor 摘要的相邻行合成一行**：这一行给出行数、共同的 label / source / kind / 尺寸 / topics / 原因，并列出它覆盖的每一个 anchor 摘要，所以「每一行都点得出名字」这条保证对整段仍然成立。
+  - **多 topic 的上下文天然会攒出这种串**：每条进入上下文的 Team fact 各留一个边界锚点，而它们的 label、尺寸、topics、原因完全一样，逐行重复只增加长度、不增加信息。
+  - **可恢复的行永不合并**：`ref:` 只能出现在可恢复行上，一行一个，合并段在可恢复行处断开。
+
+  **兼容性**
+
+  - 无宿主可见的契约变化：工具名、导出与 peer 都和 `0.2.0` 一样，DSH 线也不动。变的只有模型读到的锚点表文本——单行照旧，成串的非可恢复行现在写成一行。
+
+  **验证**
+
+  Local: `check:peers`、typecheck、boundaries、**295/295** 测试（8 文件）与 build 全绿，对着钉住的 `0.2.0-rc.1`；artifact 检查 36 条、29 条运行时相对 import 全落 tarball。
+
+  ```
+  npm i @wowyuarm/dsh-context-continuity@0.2.1
+  ```
+
+  <h3 id="en-v0-2-1-status-rows">English</h3>
+
+  The DSH line is unchanged at `>=0.2.0-rc.1 <0.2.1`. This version only changes how `context_status` lays out its anchor table: adjacent rows that differ only by their anchor digest fold into one line.
+
+  **What changed**
+
+  - **The `context_status` anchor table folds adjacent rows that differ only by their anchor digest into one line**: that line gives the row count, the shared label / source / kind / sizes / topics / reason, and every anchor digest it covers, so the guarantee that a row can be named still holds for the run as a whole.
+  - **A multi-topic context accumulates such runs by nature**: every fact that entered it leaves one boundary anchor, and those rows share a label, sizes, topics and reason exactly, so repeating them line by line adds length without information.
+  - **A restorable row is never merged**: the citable `ref:` form appears on restorable rows only, one per row, and a run is cut around every one of them.
+
+  **Compatibility**
+
+  - No host-visible contract change: the tool name, the exports and the peers are the same as `0.2.0`, and the DSH line does not move. What changes is the anchor-table text a model reads — a single row renders as before, and a run of non-restorable rows now renders as one line.
+
+  **Verification**
+
+  Local: `check:peers`, typecheck, boundaries, **295/295** tests (8 files) and build all green against the pinned `0.2.0-rc.1`; the artifact check covers 36 entries, with all 29 runtime relative imports resolving inside the tarball.
+
+  ```
+  npm i @wowyuarm/dsh-context-continuity@0.2.1
+  ```
+
 ## 0.2.0
 
 ### Minor Changes
