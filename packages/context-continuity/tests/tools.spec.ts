@@ -694,6 +694,62 @@ describe('renders: what the model reads', () => {
     expect(row).toContain('not selectable')
     expect(row).not.toContain('ref:')
   })
+
+  it('gives a run of rows that differ only by their anchor one line and every anchor', async () => {
+    // A subject's context accumulates one boundary per fact that entered it, and
+    // in a multi-topic context those rows are identical but for their digest.
+    // Repeating the label, sizes, topics and reason once per row is length with
+    // no content; the anchors themselves still have to be nameable.
+    const repeated = (seq: number): ContextTimeline['items'][number] => ({
+      ref: `team-boundary:${seq}`,
+      label: 'Team message',
+      source: 'boundary',
+      kind: 'team-boundary',
+      retainedTokens: 72_046,
+      discardedTokens: 26_993,
+      affectedTopics: ['thread:a', 'thread:b'],
+      restorable: false,
+      reason: 'multiple topics entered the context by this boundary',
+    })
+    const spy = adapterSpy({
+      timeline: async () => ({
+        usageTokens: 99_039,
+        handoffAt: 200_000,
+        items: [repeated(1), repeated(2), repeated(3)],
+      }),
+    })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution()
+    const value = await tools.status.execute({}, exec)
+    const lines = renderText(tools.status, value).split('\n')
+    expect(lines.filter(line => line.includes('Team message'))).toHaveLength(1)
+    expect(lines).toContain('- 3 identical rows: Team message [source: boundary — team-boundary] (retained ~72046, discarded ~26993; topics thread:a, thread:b) — not restorable — multiple topics entered the context by this boundary (anchors: team-boundary:1, team-boundary:2, team-boundary:3 — not selectable)')
+    expect(lines).not.toContain(expect.stringContaining('ref:'))
+  })
+
+  it('keeps a restorable row on its own line, however alike its neighbours are', async () => {
+    // The ref a rollover has to cite is the one thing that may never be merged
+    // away, so a run of alike rows is cut around every restorable one.
+    const row = (ref: string, restorable: boolean): ContextTimeline['items'][number] => ({
+      ref,
+      label: 'Team message',
+      source: 'boundary',
+      retainedTokens: 10,
+      discardedTokens: 20,
+      affectedTopics: ['thread:a'],
+      restorable,
+      ...(restorable ? {} : { reason: 'multiple topics entered the context by this boundary' }),
+    })
+    const spy = adapterSpy({
+      timeline: async () => ({ usageTokens: 1, handoffAt: 2, items: [row('team-boundary:1', false), row('context-checkpoint:keep', true), row('team-boundary:2', false)] }),
+    })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution()
+    const lines = renderText(tools.status, await tools.status.execute({}, exec)).split('\n')
+    expect(lines).toHaveLength(5)
+    expect(lines[3]).toContain('restorable — ref: context-checkpoint:keep')
+    expect(lines.filter(line => line.includes('identical rows'))).toHaveLength(0)
+  })
 })
 
 describe('text: a host rewords, it never weakens safety', () => {

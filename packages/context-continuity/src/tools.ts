@@ -288,12 +288,37 @@ function approxTokens(tokens: number): string {
 }
 
 /**
+ * Whether two rows would render the same line except for their anchor digest.
+ * A subject's context routinely accumulates runs of these — one boundary per
+ * fact that entered it, all attributable to the same several topics, all
+ * non-restorable for the same reason — and printing each one spells the same
+ * label, sizes, topics and reason once per row while saying nothing new.
+ *
+ * Only non-restorable rows may collapse: a restorable row's line is where the
+ * ref a rollover must cite is spelled out, so those are never merged.
+ */
+function sameRowButForAnchor(a: TimelineRenderItem, b: TimelineRenderItem): boolean {
+  return !a.restorable && !b.restorable
+    && a.label === b.label
+    && a.source === b.source
+    && a.kind === b.kind
+    && a.reason === b.reason
+    && a.retainedTokens === b.retainedTokens
+    && a.discardedTokens === b.discardedTokens
+    && a.affectedTopics.join('\u0000') === b.affectedTopics.join('\u0000')
+}
+
+/**
  * The status result, spelled the way the model must read it: the three budget
  * numbers first, then the work set's composition and the anchor count, then one
  * row per anchor — a restorable anchor spells out the ref the rollover call has
  * to cite, and a non-restorable one states its reason and quotes its own anchor
  * as an identifier that is explicitly not selectable, because a reader has to be
  * able to name the row it is being told it cannot return to.
+ *
+ * Rows that differ only by their anchor share one line and list every anchor
+ * they cover, so the naming guarantee above holds for the run as a whole. What
+ * a reader loses is nothing: those rows are the same fact repeated.
  *
  * The two priced blocks are rendered only when the host supplied them: a host
  * with no meter, or a scope with no compaction engine, says nothing rather than
@@ -316,13 +341,21 @@ function renderTimeline(value: {
   }
   const restorable = value.items.filter(item => item.restorable).length
   lines.push(`Anchors: ${value.items.length} rows · ${restorable} restorable`)
-  for (const item of value.items) {
+  for (let index = 0; index < value.items.length;) {
+    const item = value.items[index]!
+    let end = index + 1
+    while (end < value.items.length && sameRowButForAnchor(item, value.items[end]!)) end += 1
+    const run = value.items.slice(index, end)
     const topics = item.affectedTopics.length === 0 ? `no ${topicNounPlural}` : `${topicNounPlural} ${item.affectedTopics.join(', ')}`
     const kind = item.kind === undefined ? '' : ` — ${item.kind}`
+    const head = run.length === 1
+      ? item.label
+      : `${run.length} identical rows: ${item.label}`
     const verdict = item.restorable
       ? `restorable — ref: ${item.ref}`
-      : `not restorable — ${item.reason ?? 'no reason given'} (anchor: ${brief(item.ref)} — not selectable)`
-    lines.push(`- ${item.label} [source: ${item.source}${kind}] (retained ~${item.retainedTokens}, discarded ~${item.discardedTokens}; ${topics}) — ${verdict}`)
+      : `not restorable — ${item.reason ?? 'no reason given'} (anchor${run.length === 1 ? '' : 's'}: ${run.map(row => brief(row.ref)).join(', ')} — not selectable)`
+    lines.push(`- ${head} [source: ${item.source}${kind}] (retained ~${item.retainedTokens}, discarded ~${item.discardedTokens}; ${topics}) — ${verdict}`)
+    index = end
   }
   if (value.incompleteFrom !== undefined) {
     lines.push(`History incomplete: the lineage walk stopped at Session ${value.incompleteFrom.sessionId} (${value.incompleteFrom.reason}); ancestors before it could not be read and are not reflected above.`)
