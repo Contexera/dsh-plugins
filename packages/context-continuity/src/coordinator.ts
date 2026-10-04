@@ -230,9 +230,10 @@ export class ContextContinuityCoordinator<SubjectId> {
         // A rollover that landed while that turn ran is the input's other exit:
         // it belongs to the swap, not to the generation the swap leaves behind.
         // That covers a failed swap the host retried, and a hold answered by a
-        // rollover scheduled while this delivery was already waiting. Only a
-        // plan that has not drained yet rides it, so a subject the binding has
-        // already taken elsewhere never enters this branch.
+        // rollover scheduled while this delivery was already waiting. The plan
+        // drains in the swap's own idle wait, which is registered after this
+        // one, so parking here is normally what lets that plan carry the input;
+        // a plan that has already drained leaves it to the next transition.
         if (this.subjects.has(id)) {
           keepForNext()
           return
