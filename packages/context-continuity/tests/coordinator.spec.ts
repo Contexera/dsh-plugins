@@ -118,10 +118,11 @@ function harness(options: { ephemeral?: (message: UserMessage) => boolean; execu
   const plans: TransitionPlan[] = []
   const logs: string[] = []
   let projection: ContextProjectionState | undefined
-  let live = true
+  // The subject's live binding: which Agent runs it now, as the host has it.
+  let bound: FakeAgent | undefined = agent
   const host: ContextContinuityHost<string> = {
-    agentForSubject: id => (id === SUBJECT && live ? (agent as unknown as Agent) : undefined),
-    subjectForAgent: candidate => (live && candidate === (agent as unknown as Agent) ? { id: SUBJECT, sessionId: SESSION } : undefined),
+    agentForSubject: id => (id === SUBJECT && bound !== undefined ? (bound as unknown as Agent) : undefined),
+    subjectForAgent: candidate => (bound !== undefined && candidate === (bound as unknown as Agent) ? { id: SUBJECT, sessionId: SESSION } : undefined),
     projectionForSubject: () => projection,
     // Deliberately not `async`: a host is allowed to fail before it ever
     // returns a promise, and the coordinator has to survive that too.
@@ -148,6 +149,10 @@ function harness(options: { ephemeral?: (message: UserMessage) => boolean; execu
     logs,
     setProjection: (next: ContextProjectionState | undefined) => {
       projection = next
+    },
+    /** Move the host's binding: the Agent that runs the subject from now on. */
+    handoverTo: (next: FakeAgent | undefined) => {
+      bound = next
     },
     /** The projection a fresh pending intent produces, plus its successful result. */
     armIntent: (overrides: Partial<PendingRolloverIntent> = {}) => {
@@ -763,6 +768,55 @@ describe('a rejected swap hands the input it drained back', () => {
     await settle()
 
     expect(test.agent.followups).toEqual([])
+    expect(test.plans).toHaveLength(1)
+    expect(test.plans[0]!.carriedInput).toEqual([input])
+  })
+})
+
+describe('a hand-back follows the subject to the Agent that runs it now', () => {
+  it('delivers there instead of to the Agent the input was taken from', async () => {
+    const test = harness()
+    const input = external('held while the subject moved on')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.agent.holdIdle()
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+    expect(test.agent.followups).toEqual([])
+
+    // The subject runs another Agent before the driver converges — a swap that
+    // landed, or an activation again. The Agent this input was taken from no
+    // longer answers for the subject, so a follow-up at it reaches nobody.
+    const successor = new FakeAgent()
+    test.handoverTo(successor)
+    test.agent.goIdle()
+    await settle()
+
+    expect(test.agent.followups).toEqual([])
+    expect(successor.followups).toEqual([input])
+    expect(test.logs.join('\n')).toContain('runs the subject now')
+  })
+
+  it('keeps the input for the subject\'s next generation when no Agent is live', async () => {
+    const test = harness()
+    const input = external('held while the subject was away')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.agent.holdIdle()
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+
+    // Deactivated: no Agent may run it, and the one it was taken from must not
+    // be woken for a subject it no longer answers for.
+    test.handoverTo(undefined)
+    test.agent.goIdle()
+    await settle()
+    expect(test.agent.followups).toEqual([])
+    expect(test.logs.join('\n')).toContain('no live Agent to hand it to')
+
+    // The subject comes back and rolls over: the kept input still rides along.
+    test.handoverTo(test.agent)
+    test.armIntent({ resultSeq: 30 })
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(21))
+    await settle()
     expect(test.plans).toHaveLength(1)
     expect(test.plans[0]!.carriedInput).toEqual([input])
   })

@@ -195,31 +195,64 @@ export class ContextContinuityCoordinator<SubjectId> {
    * steered in the held step's place is the only pending input, so the driver
    * runs it before converging and the model gets that turn to itself.
    *
+   * Which Agent receives it is read at delivery, from the host's binding, never
+   * assumed from the capture. Between taking the input and delivering it the
+   * subject may have rolled over or been activated again, and the Agent the
+   * input was taken from is then an ancestor that would swallow it — which is
+   * the one outcome this whole path exists to prevent.
+   *
    * @param why the first half of the log line, naming what did not happen.
    */
   private handBackInput(id: SubjectId, agent: Agent, input: readonly UserMessage[], why: string): void {
     if (input.length === 0) return
-    void agent.whenIdle().then(() => {
+    const failed = (error: unknown): void => {
+      this.host.log(`held input delivery failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
+    }
+    const deliver = (target: Agent): void => {
       if (this.disposed) return
-      // A rollover that landed while that turn ran is the input's other exit:
-      // it belongs to the swap, not to the generation the swap leaves behind.
-      // That covers a failed swap the host retried, and a hold answered by a
-      // rollover scheduled while this delivery was already waiting.
-      if (this.subjects.has(id)) {
-        this.capturedInput.set(id, [...input, ...(this.capturedInput.get(id) ?? [])])
-        return
-      }
-      this.host.log(`${why} (${input.length} message(s), subject ${String(id)})`)
+      const where = target === agent ? '' : '; handing it to the Agent that runs the subject now'
+      this.host.log(`${why}${where} (${input.length} message(s), subject ${String(id)})`)
       for (const message of input) {
         try {
-          agent.followup(message)
+          target.followup(message)
         } catch (error) {
-          this.host.log(`held input delivery failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
+          failed(error)
         }
       }
-    }, error => {
-      this.host.log(`held input delivery failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
-    })
+    }
+    const keepForNext = (): void => {
+      this.capturedInput.set(id, [...input, ...(this.capturedInput.get(id) ?? [])])
+    }
+    void agent.whenIdle().then(() => {
+      if (this.disposed) return
+      const current = this.host.agentForSubject(id)
+      if (current === agent) {
+        // A rollover that landed while that turn ran is the input's other exit:
+        // it belongs to the swap, not to the generation the swap leaves behind.
+        // That covers a failed swap the host retried, and a hold answered by a
+        // rollover scheduled while this delivery was already waiting. Only a
+        // plan that has not drained yet rides it, so a subject the binding has
+        // already taken elsewhere never enters this branch.
+        if (this.subjects.has(id)) {
+          keepForNext()
+          return
+        }
+        deliver(current)
+        return
+      }
+      if (current === undefined) {
+        // Nothing may run it now. Keep it for the generation the subject next
+        // runs, rather than waking an Agent that no longer answers for it.
+        this.host.log(`${why}; no live Agent to hand it to, keeping it for the subject's next generation (${input.length} message(s), subject ${String(id)})`)
+        keepForNext()
+        return
+      }
+      // The subject runs another Agent now: deliver at that Agent's own idle
+      // boundary — the same discipline this method owes the one it waited on.
+      void current.whenIdle().then(() => {
+        deliver(current)
+      }, failed)
+    }, failed)
   }
 
   /**

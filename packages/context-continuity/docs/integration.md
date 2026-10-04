@@ -610,9 +610,16 @@ if (decision.kind === 'hold') {
     instruction's turn run to itself first, and it re-checks for a rollover at
     that moment rather than at the turn end — so a model that rolls over during
     the instruction turn still gets the input through the swap.
+  - *Where a hand-back goes.* Delivery reads your binding again at that moment
+    rather than trusting the Agent the input was taken from: the subject may
+    have rolled over or been activated again while the delivery waited. The
+    Agent `agentForSubject` names now receives it; none named means the input is
+    kept for the subject's next generation instead of being handed to an Agent
+    that no longer answers for it.
   - Either way the hold itself is dropped at the end of the held turn, and the
-    input is kept exactly once. Treat a rollover as landed only when its result is
-    durable, which is what `isTransitioning` reports.
+    input is kept exactly once. A rollover counts as landed on its durable
+    result — the projection's pending intent, which `isTransitioning` reports
+    while the swap it asks for is still this process's to make.
 - **The gap is measured from the log, not from memory.** The engine reads the
   newest event's own timestamp, so a restart cannot look like a half-hour
   absence, and a generation with no event at all has no measurable gap and is
