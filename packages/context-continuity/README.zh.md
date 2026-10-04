@@ -65,10 +65,10 @@ Harness 本身已经会 fork Session、从旧 Session 开一个新的、把 Sess
 ## 开发
 
 ```bash
-npm install
-npm test          # 包边界检查 + 单元测试
-npm run typecheck # 严格 TypeScript，不产出
-npm run build     # 产出 lib/
+pnpm install    # 在仓库根执行一次
+pnpm --filter @wowyuarm/dsh-context-continuity test       # 包边界检查 + 单元测试
+pnpm --filter @wowyuarm/dsh-context-continuity typecheck  # 严格 TypeScript，不产出
+pnpm --filter @wowyuarm/dsh-context-continuity build      # 产出 lib/
 ```
 
 测试跑在发布的 `@deepseek-ai/dsh-*` 包上——不需要 sibling harness checkout，整套测试一秒内跑完。

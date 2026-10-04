@@ -82,10 +82,10 @@ search. It does the rest. The step-by-step guide, with code, is
 ## Development
 
 ```bash
-npm install
-npm test          # package boundary check + unit tests
-npm run typecheck # strict TypeScript, no emit
-npm run build     # emit lib/
+pnpm install    # once, at the repository root
+pnpm --filter @wowyuarm/dsh-context-continuity test       # boundary check + unit tests
+pnpm --filter @wowyuarm/dsh-context-continuity typecheck  # strict TypeScript, no emit
+pnpm --filter @wowyuarm/dsh-context-continuity build      # emit lib/
 ```
 
 Tests run against the published `@deepseek-ai/dsh-*` packages — no sibling Harness

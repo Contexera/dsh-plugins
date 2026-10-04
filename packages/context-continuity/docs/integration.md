@@ -498,7 +498,7 @@ const pressure = new ContextPressurePolicy<MemberId>({
   log: (message, member) => ctx.logger.warn(`agent-team: ${message} (member ${member})`),
 }, { inHandLabel: 'Active Claims', jobsLabel: 'Owner jobs' })
 
-const decision = await pressure.onPreStep(member, signal)   // continue | notice | reject
+const decision = await pressure.onPreStep(member, signal)   // continue | notice | hold | reject
 ```
 
 - **Two thresholds, one order.** Below the handoff budget nothing happens; at it
@@ -564,6 +564,14 @@ if (decision.kind === 'hold') {
 }
 ```
 
+- **The judge is a deployment of its own.** `judgeFor` takes anything with a
+  `decide(request)`, which in practice is the `ctx.jev` service of
+  `@wowyuarm/dsh-jev`; a deployment adds that bundle as its own plugin row, and the
+  row names the environment variable holding the key (`apiKeyEnv`, default
+  `TYPESAFE_API_KEY`). This engine declares that package only as an optional peer,
+  for the question and answer shapes it writes and reads, and never sees a
+  credential: installing no judge leaves the whole gate off, which is a supported
+  deployment.
 - **`hold` is its own decision.** It says the input this step claimed is kept, so
   the host preserves it; `reject` says the step cannot run and has nothing to
   keep, which is what the hard limit returns. Do not treat them alike.
