@@ -177,24 +177,40 @@ export class ContextContinuityCoordinator<SubjectId> {
   private returnHeldInput(id: SubjectId, agent: Agent): void {
     if (this.holds.get(id) !== agent) return
     this.holds.delete(id)
-    const held = this.drainCapturedInput(id)
-    if (held.length === 0) return
-    // Wait for true idle, then queue the input as the next turn — the same
-    // discipline the rollover and continuation paths use: a next-turn message
-    // queued while the driver is still converging never latches a wake. Idle is
-    // also what makes this exit answer the right turn: the instruction steered
-    // in the held step's place is the only pending input, so the driver runs it
-    // before converging and the model gets that turn to itself.
+    this.handBackInput(id, agent, this.drainCapturedInput(id), 'the requested rollover did not happen; the held input is handed back unchanged')
+  }
+
+  /**
+   * Deliver input whose context never came about back to the subject, as the
+   * next turn's input, unchanged. Two exits share it because they share the
+   * hazard: a hold whose rollover never came, and a swap the host rejected
+   * after the input had already been drained into the plan. Either way the
+   * messages were taken out of circulation for a generation that never ran, so
+   * without this hand-back they are simply gone.
+   *
+   * Wait for true idle, then queue the input as the next turn — the same
+   * discipline the rollover and continuation paths use: a next-turn message
+   * queued while the driver is still converging never latches a wake. Idle is
+   * also what makes the hold's exit answer the right turn: the instruction
+   * steered in the held step's place is the only pending input, so the driver
+   * runs it before converging and the model gets that turn to itself.
+   *
+   * @param why the first half of the log line, naming what did not happen.
+   */
+  private handBackInput(id: SubjectId, agent: Agent, input: readonly UserMessage[], why: string): void {
+    if (input.length === 0) return
     void agent.whenIdle().then(() => {
       if (this.disposed) return
       // A rollover that landed while that turn ran is the input's other exit:
       // it belongs to the swap, not to the generation the swap leaves behind.
+      // That covers a failed swap the host retried, and a hold answered by a
+      // rollover scheduled while this delivery was already waiting.
       if (this.subjects.has(id)) {
-        this.capturedInput.set(id, [...held, ...(this.capturedInput.get(id) ?? [])])
+        this.capturedInput.set(id, [...input, ...(this.capturedInput.get(id) ?? [])])
         return
       }
-      this.host.log(`the requested rollover did not happen; the held input is handed back unchanged (${held.length} message(s), subject ${String(id)})`)
-      for (const message of held) {
+      this.host.log(`${why} (${input.length} message(s), subject ${String(id)})`)
+      for (const message of input) {
         try {
           agent.followup(message)
         } catch (error) {
@@ -385,14 +401,25 @@ export class ContextContinuityCoordinator<SubjectId> {
       requestId: identity.requestId,
       carriedInput: this.drainCapturedInput(id),
     }
-    const swap = this.host.executeTransition(id, plan)
-    transition.swapping = swap
     try {
+      // Inside the guard as well as the await: a host that throws before it
+      // returns a promise loses the swap just as completely.
+      const swap = this.host.executeTransition(id, plan)
+      transition.swapping = swap
       await swap
       this.subjects.delete(id)
     } catch (error) {
       this.host.log(`context rollover failed, leaving the previous generation recoverable: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
       this.subjects.delete(id)
+      // The swap never ran, so the input it was to carry belongs to the
+      // generation still standing. It was drained into a plan that no longer
+      // exists, which is why it has to be handed back here.
+      this.handBackInput(
+        id,
+        transition.agent,
+        plan.carriedInput,
+        'context rollover failed; the input it was to carry is handed back unchanged',
+      )
     }
   }
 

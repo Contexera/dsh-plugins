@@ -113,7 +113,7 @@ const settle = async (): Promise<void> => {
   await new Promise<void>(resolve => setImmediate(resolve))
 }
 
-function harness(options: { ephemeral?: (message: UserMessage) => boolean; executeError?: Error } = {}) {
+function harness(options: { ephemeral?: (message: UserMessage) => boolean; executeError?: Error | (() => Error | undefined); executeThrows?: Error } = {}) {
   const agent = new FakeAgent()
   const plans: TransitionPlan[] = []
   const logs: string[] = []
@@ -123,9 +123,14 @@ function harness(options: { ephemeral?: (message: UserMessage) => boolean; execu
     agentForSubject: id => (id === SUBJECT && live ? (agent as unknown as Agent) : undefined),
     subjectForAgent: candidate => (live && candidate === (agent as unknown as Agent) ? { id: SUBJECT, sessionId: SESSION } : undefined),
     projectionForSubject: () => projection,
-    executeTransition: async (_id, plan) => {
-      if (options.executeError !== undefined) throw options.executeError
+    // Deliberately not `async`: a host is allowed to fail before it ever
+    // returns a promise, and the coordinator has to survive that too.
+    executeTransition: (_id, plan) => {
+      if (options.executeThrows !== undefined) throw options.executeThrows
+      const failure = typeof options.executeError === 'function' ? options.executeError() : options.executeError
+      if (failure !== undefined) return Promise.reject(failure)
       plans.push(plan)
+      return Promise.resolve()
     },
     rolloverIdentity: previousSessionId => ({ newSessionId: NEW_SESSION, requestId: `rollover:${previousSessionId}` }),
     isEphemeralNotice: options.ephemeral ?? (message => message.source.kind === PLUGIN_ID),
@@ -655,5 +660,110 @@ describe('held step: the rollover answers it, or the turn end hands the input ba
     test.coordinator.holdClaimedInput(test.asAgent, [external('held')])
     test.coordinator.dispose()
     expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+  })
+})
+
+describe('a rejected swap hands the input it drained back', () => {
+  it('queues captured input as the next turn when the host swap rejects', async () => {
+    const test = harness({ executeError: new Error('activation failed') })
+    const input = external('queued for the next generation')
+    test.armIntent()
+    test.agent.inbox.nextTurn.push(input)
+    test.coordinator.captureQueuedInput(test.asAgent)
+
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(13))
+    await settle()
+
+    // The swap never ran, so the messages it was to carry belong to the
+    // generation still standing — not to a plan that no longer exists.
+    expect(test.agent.followups).toEqual([input])
+    expect(test.logs.join('\n')).toContain('the input it was to carry is handed back unchanged')
+    // The old generation stays open: neither the latch nor the gate is left armed.
+    expect(test.coordinator.isTransitioning(SUBJECT)).toBe(false)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+  })
+
+  it('hands a held input back when the swap it was waiting for rejects', async () => {
+    const test = harness({ executeError: new Error('activation failed') })
+    const input = external('held across a swap that never happened')
+    test.coordinator.holdClaimedInput(test.asAgent, [input])
+    test.armIntent({ resultSeq: 12 })
+
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(20))
+    await settle()
+
+    expect(test.agent.followups).toEqual([input])
+    expect(test.coordinator.isHoldingInput(test.asAgent)).toBe(false)
+    expect(test.coordinator.needsAdmissionGate(test.asAgent)).toBe(false)
+  })
+
+  it('hands the input back when the host fails before it returns a promise', async () => {
+    const test = harness({ executeThrows: new Error('no lifecycle mounted') })
+    const input = external('queued for a swap that never started')
+    test.armIntent()
+    test.agent.inbox.nextTurn.push(input)
+    test.coordinator.captureQueuedInput(test.asAgent)
+
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(13))
+    await settle()
+
+    // Unguarded, that throw leaves performTransition as a rejected promise
+    // nobody awaits, and the input it had already drained goes with it.
+    expect(test.agent.followups).toEqual([input])
+    expect(test.logs.some(line => line.includes('no lifecycle mounted'))).toBe(true)
+  })
+
+  it('waits for true idle before queueing it, as the hold\'s exit does', async () => {
+    const test = harness({
+      // A failed swap can leave the driver mid-convergence, which is exactly
+      // when the hand-back must wait instead of queueing into a busy driver.
+      executeError: () => {
+        test.agent.holdIdle()
+        return new Error('activation failed')
+      },
+    })
+    const input = external('delivered after the driver converges')
+    test.armIntent()
+    test.agent.inbox.nextTurn.push(input)
+    test.coordinator.captureQueuedInput(test.asAgent)
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(13))
+    await settle()
+    expect(test.agent.followups).toEqual([])
+
+    test.agent.goIdle()
+    await settle()
+    expect(test.agent.followups).toEqual([input])
+  })
+
+  it('gives the input to a swap the subject arms afterwards instead of following it up', async () => {
+    let attempts = 0
+    const test = harness({
+      executeError: () => {
+        attempts += 1
+        if (attempts > 1) return undefined
+        // A failed swap can leave the driver converging, which is what keeps
+        // the hand-back waiting long enough for the subject to roll over.
+        test.agent.holdIdle()
+        return new Error('activation failed')
+      },
+    })
+    const input = external('belongs with the generation that does land')
+    test.armIntent()
+    test.agent.inbox.nextTurn.push(input)
+    test.coordinator.captureQueuedInput(test.asAgent)
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(13))
+    await settle()
+    expect(test.plans).toEqual([])
+
+    // The old generation is recoverable: it rolls over again, and this time
+    // the swap takes the input the failed one could not.
+    test.armIntent({ resultSeq: 14 })
+    test.coordinator.onSessionEvent(SUBJECT, test.asAgent, turnEnd(15))
+    test.agent.goIdle()
+    await settle()
+
+    expect(test.agent.followups).toEqual([])
+    expect(test.plans).toHaveLength(1)
+    expect(test.plans[0]!.carriedInput).toEqual([input])
   })
 })

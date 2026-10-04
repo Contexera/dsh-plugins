@@ -201,6 +201,12 @@ successor (seed it — `SessionStore.create({ seed, meta })` — with the handof
 Resolve once the subject runs its new generation; **reject to leave the previous
 generation recoverable** (never half-swap).
 
+A rejection hands `plan.carriedInput` back: the engine takes it out of the plan
+and delivers it to the previous generation itself, once the driver goes idle
+(and, if you retry the swap first, into that retry instead). So do not deliver it
+before the swap commits — a host that hands input over and then rejects gets it
+delivered twice.
+
 > **Durable identity — keep stable:** `rolloverIdentity`'s Session-id and
 > request-id scheme is what makes an interrupted rollover converge on one
 > operation across restart. Changing the scheme risks a duplicate successor.
@@ -591,7 +597,7 @@ if (decision.kind === 'hold') {
   that it opens no step, which leaves the model writing the handoff blind to the
   request the handoff is for. The instruction therefore quotes that input (its
   first 4000 characters) and names `rolloverToolName`.
-- **The coordinator owns both ways out; the host owns neither.** There is no host
+- **The coordinator owns every way out; the host owns none.** There is no host
   call to release a hold: releasing stays internal so a host cannot strand one.
   - *The rollover.* The instruction is steered as a next-step message, so the
     driver opens one turn with it as its only input — the model's chance to write
