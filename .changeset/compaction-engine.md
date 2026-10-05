@@ -21,6 +21,18 @@
 
 `summary` 省略或留空时行为与之前完全一致，引擎照旧按模板写。
 
+**压力通知现在明确要主体自己写**
+
+本包的**自动压缩监听是关掉的**（Team 预设那行是 `auto: false`），所以「该压缩了」这个软触发**只有压力通知一处**。通知原来只说「调用 `context_compact`」，于是主体很自然地把措辞交回给引擎——**恰恰在它自己的判断最值钱的那一刻**。现在通知改成：
+
+> Finish the current atomic action: call `context_compact` with a summary you write yourself, to shorten this generation in place — your recent work stays verbatim and you keep working here — which is the default. Only you can say what in the replaced stretch has to survive; omitting it lets the engine write one, which is what happens when a reduction is forced on you. …
+
+通知总长仍在原测试卡住的 1200 字符内（实测约 767）。**「通知会提这个参数」与「工具确实有它」不会错位**：两者出自同一个包、同一个版本，而通知只在主体确实有压缩工具时才提它（`canCompact`）。
+
+**为什么工具描述里那份清单不换成模板原文**
+
+模板是写给**压缩引擎**的（"Condense the conversation ABOVE"、以及"不要提到这次摘要请求"这类规则）；主体要写的是**自己的检查点**，套用引擎的口吻只会更差。所以主体那侧保留自己的分节说明，两份文本**意图相同、受众不同**。
+
 **为什么这不需要改上游**
 
 上游 `CompactionEngine.summarize()` 的**返回值就是替换掉那段上下文的内容**，而且它的返回类型**明确允许一个不发起 LLM 调用的写手**（原文：*"an unmarked template, remote, or other summarizer"*，`llmStreamCall?: never`）。所以主体写的文本按**未标记**结果交回：事务不会伪称发生过一次并不存在的调用。**代价**：这份文本仍要短于被替换的那段，否则替换被拒——这是个可恢复的失败（工具会说上下文未变），主体可以写短些再试一次。
@@ -53,7 +65,7 @@ class HouseStyle extends ContinuityCompactionEngine {
 
 **验证**
 
-typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套 **321/321 通过**（10 个文件）。`compaction-engine.spec.ts` 8 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确；**交出 `summary` 时原样返回该文本、且一次 stream 请求都不发**（连路由仍照常报告）。`tools.spec.ts` 新增 4 例，钉住：参数表只有 `summary` 一项；这份文本**只为这一次尝试存在**，成功、无可压缩区间、失败三条路径都不留残留；省略时不留；超限摘要被拒且**引擎根本不被调用**。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
+typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套 **323/323 通过**（10 个文件）。`compaction-engine.spec.ts` 8 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确；**交出 `summary` 时原样返回该文本、且一次 stream 请求都不发**（连路由仍照常报告）。`tools.spec.ts` 新增 4 例，钉住：参数表只有 `summary` 一项；这份文本**只为这一次尝试存在**，成功、无可压缩区间、失败三条路径都不留残留；省略时不留；超限摘要被拒且**引擎根本不被调用**。`pressure.spec.ts` 新增 2 例，钉住：通知要主体自己写、并说清省略意味着什么；**没有压缩工具的那条路径绝不提这个参数**。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
 
 <h3 id="en-v0-3-0-engine">English</h3>
 
@@ -71,6 +83,18 @@ Compaction can start because the subject asked for it, or **be forced on it at a
 - **It is forced on the subject** (the hard limit, or a provider refusing an oversized request): no subject can take part at that moment, so the engine writes from the template — **which is why the template can never be removed**.
 
 Omitting `summary`, or passing it blank, behaves exactly as before: the engine writes from the template.
+
+**The pressure notice now asks the subject to write it**
+
+**This package's automatic compaction listeners are off** (the Team preset's row is `auto: false`), so the pressure notice is the **only** soft trigger that says "compact now". The notice used to say only "call `context_compact`", so a subject would naturally hand the wording back to the engine — **at exactly the moment its own judgement is worth most**. It now reads:
+
+> Finish the current atomic action: call `context_compact` with a summary you write yourself, to shorten this generation in place — your recent work stays verbatim and you keep working here — which is the default. Only you can say what in the replaced stretch has to survive; omitting it lets the engine write one, which is what happens when a reduction is forced on you. …
+
+The notice still fits inside the 1200-character bound the existing test pins (about 767 measured). **"The notice asks for this argument" and "the tool has it" cannot drift apart**: both come from this package in one version, and the notice mentions the tool only when the subject really has it (`canCompact`).
+
+**Why the tool's own section list is not the template text**
+
+The template is written for a **compaction engine** ("Condense the conversation ABOVE", and rules like "do not mention this summarization request"); a subject writes **its own checkpoint**, and adopting the engine's voice would only make that worse. So the subject keeps its own section wording: two texts with the **same intent and different audiences**.
 
 **Why this needs no upstream change**
 
@@ -104,4 +128,4 @@ Purely additive: one new export plus a subpath export, `@wowyuarm/dsh-context-co
 
 **Verification**
 
-Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes **321/321 across 10 files**. `compaction-engine.spec.ts` (8 cases) pins that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; that the call's `purpose` and returned envelope are right; and that **a supplied `summary` comes back verbatim with zero stream requests issued** (the route is still reported). `tools.spec.ts` adds 4 cases pinning that the parameter table holds `summary` alone; that the text **exists for that one attempt only** — nothing is left behind on the success, no-safe-range, or failure path; that omitting it leaves nothing; and that an oversized summary is rejected **with the engine never called**. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.
+Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes **323/323 across 10 files**. `compaction-engine.spec.ts` (8 cases) pins that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; that the call's `purpose` and returned envelope are right; and that **a supplied `summary` comes back verbatim with zero stream requests issued** (the route is still reported). `tools.spec.ts` adds 4 cases pinning that the parameter table holds `summary` alone; that the text **exists for that one attempt only** — nothing is left behind on the success, no-safe-range, or failure path; that omitting it leaves nothing; and that an oversized summary is rejected **with the engine never called**. `pressure.spec.ts` adds 2 cases pinning that the notice asks for a subject-written summary and states what omitting it means, and that **the path with no compaction tool never mentions the argument**. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.

@@ -562,6 +562,41 @@ describe('the notice text', () => {
     expect(text.length).toBeLessThan(1200)
   })
 
+  it('asks for a summary the subject writes, and says what omitting it means', () => {
+    // The notice is the only soft trigger this package has: the engine's own
+    // automatic listeners stay off, so a subject that reads "call
+    // context_compact" and nothing more hands the wording back to the engine at
+    // exactly the moment its own judgement is worth most.
+    const text = contextPressureNoticeText({
+      usageTokens: 210_000,
+      handoffAt: 200_000,
+      hardLimit: 256_000,
+      inHand: [],
+      jobs: [],
+      canCompact: true,
+    })
+    expect(text).toContain('with a summary you write yourself')
+    expect(text).toContain('Only you can say what in the replaced stretch has to survive')
+    expect(text).toContain('omitting it lets the engine write one')
+    // The forced reduction is the case with no subject present, so the notice
+    // must not read as though omitting the summary were a free choice.
+    expect(text).toContain('forced on you')
+  })
+
+  it('never asks for a summary on the path where no compaction tool exists', () => {
+    // The summary is an argument of that tool: asking for one on the
+    // rollover-only path would describe a call the subject cannot make.
+    const text = contextPressureNoticeText({
+      usageTokens: 210_000,
+      handoffAt: 200_000,
+      hardLimit: 256_000,
+      inHand: [],
+      jobs: [],
+    })
+    expect(text).not.toContain('summary you write yourself')
+    expect(text).not.toContain('context_compact')
+  })
+
   it('never names a compaction tool a subject does not have', () => {
     const text = contextPressureNoticeText({
       usageTokens: 210_000,
