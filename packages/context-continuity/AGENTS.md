@@ -20,10 +20,17 @@ Authority order:
   modules, `node:` builtins, and the declared `@deepseek-ai/dsh-*` peers;
   `npm run check:boundaries` enforces exactly that list. Never import a host
   package (`@wowyuarm/dsh-agent-team`, Loom) or a sibling Harness source path —
-  a host-specific leak defeats the reason this package exists. The one deliberate
-  exception is `@wowyuarm/dsh-jev`, an optional peer imported for the long-gap
-  gate's question and answer shapes; it carries its reason in `ALLOWED_PACKAGES`
-  and must stay the only one.
+  a host-specific leak defeats the reason this package exists. There are exactly
+  two deliberate exceptions, each carrying its reason in `ALLOWED_PACKAGES`:
+  - `@wowyuarm/dsh-jev`, an optional peer imported for the long-gap gate's
+    question and answer shapes.
+  - `@deepseek-ai/dsh-compaction-basic`, imported by `compaction-engine.ts` only.
+    A checkpoint template states what a summary must preserve, but the summary is
+    written by whichever engine a host mounts, so the template can only take
+    effect from inside that engine. This is a Harness package, not a host package,
+    so the rule above still holds. The cost bought is a real coupling: the
+    subclass tracks `summarize()` across Harness releases, and a change to that
+    hook's shape breaks it rather than degrading gracefully.
 - **Section names in `message-codec.ts` are frozen.** They are read back out of
   logs written by earlier generations; changing one silently breaks decoding of
   its own history. The codec is parameterized by `pluginId` and the two

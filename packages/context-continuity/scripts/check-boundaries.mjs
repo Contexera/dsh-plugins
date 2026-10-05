@@ -26,6 +26,15 @@ const ALLOWED_PACKAGES = new Set([
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-compaction',
+  // The second deliberate exception, and the only concrete Harness backend this
+  // package names: `dsh-compaction-basic` is what a host would otherwise mount
+  // to write summaries, and the checkpoint template can only take effect from
+  // inside that engine. It is a Harness package, not a host package — the
+  // host-agnostic rule this list protects is about never importing a host
+  // (dsh-agent-team, Loom), which stays true. Confined to
+  // `src/compaction-engine.ts`; the cost bought is that the subclass tracks
+  // `summarize()` across Harness releases.
+  '@deepseek-ai/dsh-compaction-basic',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-persistence',

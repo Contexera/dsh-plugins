@@ -107,6 +107,12 @@ export {
   DEFAULT_COMPACTION_TEMPLATE,
 } from './compaction-template.ts'
 
+export { ContinuityCompactionEngine } from './compaction-engine.ts'
+export type {
+  ContinuitySummarizationInput,
+  ContinuitySummaryResult,
+} from './compaction-engine.ts'
+
 export {
   CONTEXT_SEARCH_RESULT_LIMIT,
   CONTEXT_READ_BEFORE,
