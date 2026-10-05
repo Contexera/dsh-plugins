@@ -1,5 +1,63 @@
 # @wowyuarm/dsh-context-continuity
 
+## 0.3.0
+
+### Minor Changes
+
+- [中文](#cn-v0-3-0) | [English](#en-v0-3-0)
+
+  <h3 id="cn-v0-3-0">中文</h3>
+
+  DSH 线不变，仍是 `>=0.2.0-rc.1 <0.2.1`。这一版把「压缩摘要写什么」收回本包：导出一份通用模板，并给出用它的压缩后端；`context_compact` 新增可选参数 `summary`，主体可以自己写这份替换文本。
+
+  **改了什么**
+
+  - **新增通用模板 `DEFAULT_COMPACTION_TEMPLATE`（含分节清单 `DEFAULT_COMPACTION_SECTIONS`）**：七节，按「后来者拿不回来的东西」排序，并要求每条事实标明**验证过**还是**仅听说**、说清**欠谁什么、谁在等我**。这套排序来自实测：133 次真实压缩里，三个 code 向分节占了约 55% 篇幅、Next Step 只占 2%，41% 的摘要完全没提谁在等这个主体。
+  - **新增压缩后端 `ContinuityCompactionEngine`（子路径 `@wowyuarm/dsh-context-continuity/compaction-engine`）**：挂在原本挂 `@deepseek-ai/dsh-compaction-basic` 的位置，模板才真正生效；只覆盖 `summarize()`，其余全部继承。措辞的改法是在子类里覆盖 `protected template`，不走配置表。该子路径**必须默认导出**——预设按 `name:` 挂插件时 loader 取的是默认导出，只给具名导出会让那一行**静默失效**。
+  - **`context_compact` 新增可选参数 `summary`**：主体在同一次调用里写下替换文本，不额外多一轮；省略或留空时行为与之前完全一致。压力通知随之改口径——本包自动监听是关的，这条通知是唯一的软触发，而旧措辞等于让主体在判断最值钱的那一刻把措辞交回引擎。
+  - **三处工具描述与提示语的判断修正**：`context_checkpoint` 的触发条件从「接下来危险吗」改成「这个 context 我以后会想回来吗」；`context_rollover` 说明带 `checkpointRef` 回返是「锚点前缀逐字打开 + handoff 照样写」，不是丢弃；`context_compact` 说明摘要不是主体写的；`jobsNote` 把只有宿主能兑现的「还有 job 在跑就拒绝换代」从引擎描述里摘出来，宿主传 `''` 即可丢掉。
+  - **不需要改上游**：`summarize()` 的返回值就是替换内容，且其类型明确允许一个不发起 LLM 调用的写手。代价：这份文本要短于被替换的那段，否则被拒（工具会说上下文未变，可写短再试）。
+
+  **兼容性**
+
+  - 纯新增：两个新导出、一个新子路径、一个新**可选**参数。**不挂这个类就完全没有行为变化**，继续挂原版 `compaction-basic` 仍受支持。
+  - 新增 peer `@deepseek-ai/dsh-compaction-basic`（同一条 DSH 线）；DSH 线不动，不涉及重新认证。
+  - 两条跟着 Harness 版本走的耦合，失效都是**静默**的：子类复述了 `summarize()` 的调用形状；主体自写的摘要靠 Session 对象同一性送达引擎（上游若包装或重建 agent 就退回模板）。例外与理由记在 `AGENTS.md`。
+
+  **验证**
+
+  Local: `check:peers`、typecheck、`check:boundaries`、**324/324** 测试（10 文件）、build 全绿，对着钉住的 `0.2.0-rc.1`；artifact 42 条、34 条运行时相对 import 全落 tarball。测试钉住：末条指令就是本包模板，且**绝不出现原版模板的招牌分节**；交出的 `summary` 原样返回且**一次 stream 请求都不发**；这份文本**只为那一次尝试存在**；超限被拒且引擎根本不被调用；**构建产物经 loader 取法取出的是那个类**。
+
+  ```
+  npm i @wowyuarm/dsh-context-continuity@0.3.0
+  ```
+
+  <h3 id="en-v0-3-0">English</h3>
+
+  The DSH line is unchanged at `>=0.2.0-rc.1 <0.2.1`. This version takes "what a compaction summary should say" back into this package: it exports a general template and ships a compaction backend that uses it, and `context_compact` gains an optional `summary` so the subject can write that replacement text itself.
+
+  **What changed**
+
+  - **A general template, `DEFAULT_COMPACTION_TEMPLATE` (with `DEFAULT_COMPACTION_SECTIONS`)**: seven sections ordered by what a successor cannot reconstruct, asking for every fact to be marked **verified or merely trusted** and for **what is owed to whom, and who is waiting**. The ordering is measured: across 133 real compactions, three code-facing sections took about 55% of every summary while Next Step took 2%, and 41% never mentioned who was waiting on the subject.
+  - **A compaction backend, `ContinuityCompactionEngine` (subpath `@wowyuarm/dsh-context-continuity/compaction-engine`)**: mount it where a host would otherwise mount `@deepseek-ai/dsh-compaction-basic` — that is what makes the template take effect. Only `summarize()` is overridden; everything else is inherited. Wording changes by overriding a `protected template` in a subclass, not by a config key. The subpath **must default-export** the class: a preset mounts by `name:` and the loader takes the default export, so a named export alone would make that line **silently do nothing**.
+  - **`context_compact` gains an optional `summary`**: the subject writes the replacement text in the same call, with no extra round trip; omitting it or passing it blank behaves exactly as before. The pressure notice follows: this package's automatic listeners are off, so the notice is the only soft trigger, and it used to hand the wording back to the engine at exactly the moment the subject's judgement is worth most.
+  - **Judgement fixed in three tool descriptions and the notice**: `context_checkpoint`'s trigger moves from "is what comes next risky" to "is this a context I might want back"; `context_rollover` now says a `checkpointRef` return opens on the anchor's prefix word for word with the handoff still written on top, rather than discarding; `context_compact` says the summary is not the subject's; and `jobsNote` lifts a promise only a host can honour out of the engine description, so a host can drop it with `''`.
+  - **No upstream change is needed**: `summarize()`'s return value is the replacement content, and its type explicitly admits a summarizer that issues no LLM call. The cost: that text must be shorter than the stretch it replaces, or the replacement is refused (the tool says the context is unchanged, and the subject can retry shorter).
+
+  **Compatibility**
+
+  - Purely additive: two new exports, one new subpath, one new **optional** parameter. **Mounting this class is the only way to see a behavior change**, and the stock `compaction-basic` row remains supported.
+  - One new peer, `@deepseek-ai/dsh-compaction-basic`, on the same DSH line. The line does not move, so no re-certification is involved.
+  - Two couplings to Harness releases, both failing **silently**: the subclass restates `summarize()`'s call shape, and a subject-written summary reaches the engine through Session object identity (a wrapped or rebuilt agent falls back to the template). The exception and its reason are recorded in `AGENTS.md`.
+
+  **Verification**
+
+  Local: `check:peers`, typecheck, `check:boundaries`, **324/324** tests (10 files) and build all green against the pinned `0.2.0-rc.1`; 42 artifact entries with all 34 runtime relative imports inside the tarball. Tests pin that the final instruction is this package's template and that **the stock template's signature sections never appear**; that a supplied `summary` returns verbatim with **zero stream requests issued**; that the text **exists for that one attempt only**; that an oversized summary is refused **with the engine never called**; and that **the built module unwraps to that class through the loader's own rule**.
+
+  ```
+  npm i @wowyuarm/dsh-context-continuity@0.3.0
+  ```
+
 ## 0.2.1
 
 ### Patch Changes
