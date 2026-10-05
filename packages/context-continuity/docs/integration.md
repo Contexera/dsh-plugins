@@ -315,6 +315,10 @@ const tools = createContinuityTools({
   timelineGuidance: 'Team boundaries render as `Team message`, `Team task claim change`, or `First arrival: <refs>`.',
   topicNoun: 'Thread',
   topicNounPlural: 'Threads',
+  // The engine has no job concept and never refuses a rollover over one, so this
+  // sentence is your guarantee, not the engine's: keep the default only where you
+  // actually enforce it, and pass '' where you have no background work to lose.
+  jobsNote: 'Collect or stop your background jobs before calling: a rollover is refused while jobs this Team Member owns are still running.',
 })
 // register tools.rollover / tools.checkpoint / tools.status / tools.compact
 ```
@@ -372,14 +376,44 @@ const tools = createContinuityTools({
   rather than `topic`) in both the description and the rendered rows. The
   structural contract, the restorable rule, and "Structural only: no transcript
   content" stay engine-owned.
+- **A checkpointRef return keeps the prefix and still writes the handoff.** The
+  default rollover prose states what the arguments never reveal: the successor
+  opens on the exact prefix through the anchor, word for word, *and* the handoff
+  is written and delivered on top of it — so the move is a chosen verbatim base
+  plus a self-written delta, not a discard. It is the mirror of `context_compact`:
+  compaction keeps the recent tail and summarizes what is older, while a return
+  keeps an older stretch and lets the subject summarize what came after. Reach for
+  it when the value sits before the stretch being dropped; reach for compaction
+  when the value is the recent work.
+- **The checkpoint trigger is the state being left, not the risk ahead.** A
+  checkpoint is cheap — one call, and work continues in the next turn — so it buys
+  an option rather than committing to a return, and the default guidance asks
+  whether this context is one the subject might want back. That covers a long dig
+  whose value is its conclusion, a stretch likely to fill the window with bulk, and
+  a risky refactor alike; anchoring on risk alone is what leaves the move unused.
+  `checkpointGuidance` replaces the wording, and the engine keeps the sentences
+  about when a checkpoint resolves and what it never snapshots.
+- **Neither move deletes anything.** A rollover archives the generation it ends and
+  a compaction replaces what the subject sees rather than what was recorded, so the
+  default prose says so: what is being chosen is what stays in front of the subject,
+  not what survives. A host whose subject can search its own history should say so
+  in `carriedContext` — recall is what makes discarding the recent work cheap.
+- **The jobs sentence is a host promise.** `jobsNote` defaults to the
+  `Collect or stop your background jobs before calling` sentence, and the engine
+  itself never refuses a rollover over a job — it has no job concept. Keep the
+  default where the host really enforces such a guard (the Agent Team does); pass
+  `''` where the subject owns no background work, so the model is not reading a
+  refusal that cannot happen.
 - **Names are fixed:** `context_rollover`, `context_checkpoint`,
   `context_status`, `context_compact`. The prose you override refers to them by
   name, so only
   subject-facing vocabulary is yours: the anti-forgery sentence, "a context change
-  never rolls back an external effect", and the jobs/memory discipline are
-  engine-owned and survive any override. The compaction description's three
+  never rolls back an external effect", the shape of a `checkpointRef` return, and
+  the memory discipline are
+  engine-owned and survive any override. The compaction description's four
   non-negotiables are engine-owned for the same reason: it replaces what the
-  subject sees rather than what was recorded, it never switches generation, and it
+  subject sees rather than what was recorded, it never switches generation, the
+  summary is written by the engine rather than by the subject, and it
   states what happened instead of implying success.
 - **The contract is deliberately generic.** A tool value carries `ref`, `label`,
   and `affectedTopics`, not one host's words for a Thread or a Claim: the same

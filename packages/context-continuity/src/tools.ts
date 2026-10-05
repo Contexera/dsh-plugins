@@ -111,6 +111,18 @@ export interface ContinuityToolText {
   /** When burying an anchor is worth it, spliced into the checkpoint description. */
   readonly checkpointGuidance?: string
   /**
+   * The pre-rollover discipline for a subject that owns background work,
+   * spliced into the rollover description.
+   *
+   * The engine has no job concept of its own — it never refuses a rollover over
+   * one — so this sentence is a host's own guarantee, true exactly where that
+   * host enforces it. A subject that owns no background work passes `''` to
+   * drop the sentence, rather than promise a refusal that will never come. A
+   * host supplying its own wording writes the sentence alone: the surrounding
+   * space is the engine's.
+   */
+  readonly jobsNote?: string
+  /**
    * What a rollover carries forward automatically, so the handoff need not
    * repeat it. The engine's default states the one universal truth — the
    * subject stays the same identity across the switch — and a host names its
@@ -144,10 +156,14 @@ export interface ContinuityTools {
   readonly compact: ToolDefinition
 }
 
-const DEFAULT_TEXT: Required<Omit<ContinuityToolText, 'carriedContext'>> = {
+const DEFAULT_TEXT: Required<Omit<ContinuityToolText, 'carriedContext' | 'jobsNote'>> = {
   subjectNoun: 'agent',
   rolloverChecklist: 'the current objective and the atomic action in flight; facts and evidence not already recorded elsewhere; unresolved conflicts; current external side effects and their verification state (files, git, jobs, browser state, remote calls); one explicit next step',
-  checkpointGuidance: 'Record one before a noisy or risky phase — a broad refactor, an experiment whose value is unproven — when returning to the current completed state may later be useful.',
+  // The trigger is the state being left, not the risk ahead: a checkpoint is
+  // cheap and buys an option, so the question the model has to ask is whether
+  // this context is one it might want back — a long dig and a risky refactor are
+  // both instances of that, and neither is the general case.
+  checkpointGuidance: 'Record one whenever the context you are in now is one you might want back: before a long dig or a change you may want to abandon — anywhere the value will be the conclusion rather than the trail — just after something important got settled, before leaving the main line for a long errand, and before a stretch likely to fill the window with bulk (long files, large tool output, a build loop). Recording one is cheap and work continues in the next turn, so most checkpoints are never returned to; whether a return is worth making stays your judgement.',
   timelineGuidance: '',
   topicNoun: 'topic',
   topicNounPlural: 'topics',
@@ -165,19 +181,42 @@ function defaultCarriedContext(subjectNoun: string): string {
 }
 
 /**
- * The rollover intent's own contract, worded as the model must read it. Two
+ * The pre-rollover discipline for a subject that owns background work. The
+ * engine owns no job concept, so this is a host's promise and not an engine
+ * one: it states a refusal only the host can perform, which is why a host that
+ * enforces none passes `''`.
+ */
+function defaultJobsNote(subjectNoun: string): string {
+  return `Collect or stop your background jobs before calling: a rollover is refused while jobs this ${subjectNoun} owns are still running.`
+}
+
+/**
+ * The jobs sentence as it reads inside the rollover description: one sentence of
+ * its own when the host keeps it, nothing at all when the host has no such
+ * guarantee. The knob carries no punctuation of its own — a host supplying its
+ * own wording should not have to know to lead with a space.
+ */
+function jobsSentence(note: string): string {
+  return note.trim() === '' ? '' : ` ${note}`
+}
+
+/**
+ * The rollover intent's own contract, worded as the model must read it. Three
  * sentences are not host knobs: the anti-forgery sentence (a synthesized ref is
  * the one input that could silently produce a context the subject never had),
- * and the delta framing — the handoff is what a fresh generation could not
+ * the delta framing — the handoff is what a fresh generation could not
  * reconstruct on its own, not a full state dump that repeats what carries
- * forward.
+ * forward — and what a `checkpointRef` return actually does, which no reading
+ * of the arguments reveals: the prefix comes back word for word AND the handoff
+ * is still written on top of it, so the move is a chosen verbatim base plus a
+ * self-written delta rather than a discard.
  */
 function rolloverDescription(text: Required<ContinuityToolText>): string {
-  return `context_rollover: end this context generation and continue as the same ${text.subjectNoun} in a new one. Without checkpointRef the context starts fresh and empty, seeded only by your handoff — the default, cheapest path at context pressure, and the right choice for ordinary generation changes and pressure-driven handoffs. Omit checkpointRef unless you are deliberately returning to a restorable anchor you just selected from a context_status result: supply a checkpointRef only when that status listed it as restorable and you are citing its exact ref — never synthesize, guess, or reconstruct one; a fabricated ref rejects as a model-visible error. ${text.carriedContext} Write the handoff as the live working state a fresh generation could not reconstruct on its own, as one prose string covering: ${text.rolloverChecklist}. A context change never rolls back any external effect — describe current state so the next generation can re-verify. Record anything worth keeping in your private memory/notes first. Collect or stop your background jobs before calling: a rollover is refused while jobs this ${text.subjectNoun} owns are still running.`
+  return `context_rollover: end this context generation and continue as the same ${text.subjectNoun} in a new one. Without checkpointRef the context starts fresh and empty, seeded only by your handoff — the default, cheapest path at context pressure, and the right choice for ordinary generation changes and pressure-driven handoffs. With a checkpointRef you return to an anchor you recorded earlier instead: the new generation opens standing on the exact prefix through that anchor, word for word, and your handoff is still written and still delivered on top of it. Reach for that when the part of this context worth keeping is what came BEFORE some stretch — a framing, a settled understanding, a decision — and the stretch since then is worth only the few sentences you can state: you keep the base and drop the trail. Omit checkpointRef unless you are deliberately returning to a restorable anchor you just selected from a context_status result: supply a checkpointRef only when that status listed it as restorable and you are citing its exact ref — never synthesize, guess, or reconstruct one; a fabricated ref rejects as a model-visible error. ${text.carriedContext} Write the handoff as the live working state a fresh generation could not reconstruct on its own, as one prose string covering: ${text.rolloverChecklist}. A context change never rolls back any external effect — describe current state so the next generation can re-verify. Neither move deletes anything: an ended generation is archived and a compaction replaces what you see rather than what was recorded, so what you are choosing is what stays in front of you. Record anything worth keeping in your private memory/notes first.${jobsSentence(text.jobsNote)}`
 }
 
 function checkpointDescription(text: Required<ContinuityToolText>): string {
-  return `context_checkpoint: record a named checkpoint at the end of the current turn — an opaque, private, restorable anchor for this ${text.subjectNoun}'s context lineage. ${text.checkpointGuidance} The checkpoint resolves only when this turn completes; the host continues work in the next turn automatically. A checkpoint never snapshots files, git, jobs, or any external state: returning to one (via context_rollover with its checkpointRef) resumes the conversation prefix and nothing else. Checkpoints are private context structure, not shared facts, and are never visible to other subjects.`
+  return `context_checkpoint: record a named checkpoint at the end of the current turn — an opaque, private, restorable anchor for this ${text.subjectNoun}'s context lineage. ${text.checkpointGuidance} The checkpoint resolves only when this turn completes; the host continues work in the next turn automatically. A checkpoint never snapshots files, git, jobs, or any external state: returning to one (via context_rollover with its checkpointRef) reopens the conversation prefix through that turn, word for word, and carries your handoff on top of it — nothing else about the world comes back with you. Checkpoints are private context structure, not shared facts, and are never visible to other subjects.`
 }
 
 /**
@@ -195,13 +234,17 @@ function statusDescription(text: Required<ContinuityToolText>): string {
 }
 
 /**
- * What the compaction tool is for, worded the way the model must read it. Three
+ * What the compaction tool is for, worded the way the model must read it. Four
  * facts are not negotiable in any host's rewrite: the replacement is of what the
  * subject sees rather than of what was recorded, it never switches generation,
- * and the result states what happened instead of implying success.
+ * the summary is written by the engine rather than by the subject, and the
+ * result states what happened instead of implying success. The third is the one
+ * that decides between this tool and a checkpoint return: a subject that needs a
+ * particular stretch preserved in its own words cannot get that from a summary
+ * it does not write.
  */
 function compactDescription(): string {
-  return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
+  return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. The summary is written for you from that stretch, not by you: if a particular passage has to survive in your own words, keep it in front of you instead (a checkpoint return keeps an older prefix verbatim). Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
 }
 
 /**
@@ -381,6 +424,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     subjectNoun: text.subjectNoun ?? DEFAULT_TEXT.subjectNoun,
     rolloverChecklist: text.rolloverChecklist ?? DEFAULT_TEXT.rolloverChecklist,
     checkpointGuidance: text.checkpointGuidance ?? DEFAULT_TEXT.checkpointGuidance,
+    jobsNote: text.jobsNote ?? defaultJobsNote(text.subjectNoun ?? DEFAULT_TEXT.subjectNoun),
     carriedContext: text.carriedContext ?? defaultCarriedContext(text.subjectNoun ?? DEFAULT_TEXT.subjectNoun),
     timelineGuidance: text.timelineGuidance ?? DEFAULT_TEXT.timelineGuidance,
     topicNoun: text.topicNoun ?? DEFAULT_TEXT.topicNoun,

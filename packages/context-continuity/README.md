@@ -31,8 +31,12 @@ Four tools it can call, plus one automatic safeguard — these ship ready to use
 every plugin that adopts this gives its agents the same set:
 
 - **`context_rollover`** — start a fresh Session but stay the same agent, carrying
-  a handoff you write into the new one.
+  a handoff you write into the new one. Cite a `checkpointRef` and the new Session
+  instead opens on the exact prefix through that anchor, word for word, with the
+  handoff still written on top of it: keep the base, drop the trail.
 - **`context_checkpoint`** — mark the current spot so you can come back to it.
+  Cheap by design: record one wherever the context you are in now is one you might
+  want back, since most checkpoints are never returned to.
 - **`context_status`** — read where your context stands: how many tokens it uses
   against your budgets, how it is composed, how much could be compacted now, and
   which earlier spots are safe to return to.

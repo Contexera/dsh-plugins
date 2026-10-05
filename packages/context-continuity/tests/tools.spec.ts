@@ -772,6 +772,9 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.status.description).toContain('Structural only: no transcript content.')
     expect(tools.compact.description).toContain('The log is append-only')
     expect(tools.compact.description).toContain('It never switches generation and never returns to an anchor')
+    // The summary's authorship is what separates this tool from a checkpoint
+    // return, and a subject cannot tell from the arguments who writes it.
+    expect(tools.compact.description).toContain('The summary is written for you from that stretch, not by you')
   })
 
   it('splices host prose into the descriptions it belongs to', () => {
@@ -784,11 +787,42 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.status.description).toContain("this Team Member's context lineage")
   })
 
+  it('lets a host that owns no background work drop the jobs promise', () => {
+    // The engine has no job concept and never refuses a rollover over one, so the
+    // sentence is a host guarantee. A host enforcing none must be able to remove
+    // it rather than leave the model reading a refusal that cannot happen.
+    const tools = createContinuityTools(adapterSpy().adapter, { jobsNote: '' })
+    expect(tools.rollover.description).not.toContain('background jobs')
+    expect(tools.rollover.description).not.toContain('is refused while jobs')
+    // Everything else the rollover description carries survives the drop.
+    expect(tools.rollover.description).toContain('A context change never rolls back any external effect')
+  })
+
+  it('takes a host jobs sentence without making it carry its own spacing', () => {
+    const tools = createContinuityTools(adapterSpy().adapter, { jobsNote: 'Stop the build first.' })
+    expect(tools.rollover.description).toContain('first. Stop the build first.')
+    expect(tools.rollover.description).not.toContain('  ')
+    // A blank note reads as no note: whitespace is not a sentence.
+    const blank = createContinuityTools(adapterSpy().adapter, { jobsNote: '   ' })
+    expect(blank.rollover.description).not.toContain('is refused while jobs')
+    expect(blank.rollover.description).not.toContain('  ')
+  })
+
   it('defaults to a domain-neutral vocabulary', () => {
     const tools = createContinuityTools(adapterSpy().adapter)
     expect(tools.rollover.description).toContain('continue as the same agent in a new one')
     expect(tools.rollover.description).toContain('jobs this agent owns')
     expect(tools.checkpoint.description).toContain('restorable anchor for this agent\'s context lineage')
+  })
+
+  it('keeps the jobs sentence byte-identical for the host that already relies on it', () => {
+    // The Agent Team enforces this refusal and passes no jobsNote, so its
+    // published prompt text has to survive the knob being introduced verbatim —
+    // the sentence only became configurable, it did not change.
+    const tools = createContinuityTools(adapterSpy().adapter, { subjectNoun: 'Team Member' })
+    expect(tools.rollover.description).toContain(
+      ' Record anything worth keeping in your private memory/notes first. Collect or stop your background jobs before calling: a rollover is refused while jobs this Team Member owns are still running.',
+    )
   })
 
   it('keeps the declared parameter descriptions in the host vocabulary', () => {
@@ -816,6 +850,57 @@ describe('text: the delta framing and the carried-context declaration', () => {
     const tools = createContinuityTools(adapterSpy().adapter, { carriedContext })
     expect(tools.rollover.description).toContain(carriedContext)
     expect(tools.rollover.description).not.toContain('You remain the same agent across a rollover')
+  })
+})
+
+describe('text: the checkpoint trigger is the state being left, not the risk ahead', () => {
+  // A checkpoint is cheap and buys an option, so the guidance has to cover the
+  // whole family of "I might want this context back" — a long dig whose value is
+  // its conclusion is the common case, and a risky refactor is one instance of
+  // it. Anchoring the guidance on risk alone is what left the move unused.
+  it('asks whether this context is one the subject might want back', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.checkpoint.description).toContain('one you might want back')
+    expect(tools.checkpoint.description).toContain('the value will be the conclusion rather than the trail')
+    expect(tools.checkpoint.description).not.toContain('noisy or risky phase')
+  })
+
+  it('says the option is cheap and the judgement stays the subject\'s', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.checkpoint.description).toContain('most checkpoints are never returned to')
+    expect(tools.checkpoint.description).toContain('whether a return is worth making stays your judgement')
+  })
+})
+
+describe('text: what a checkpointRef return does, which the arguments never reveal', () => {
+  // The rollover description used to say only how to cite a ref safely. Nothing
+  // in the tool's arguments reveals that the prefix returns word for word AND
+  // the handoff is still written on top of it, so a model reading only the
+  // argument docs cannot tell this move from discarding the recent work.
+  it('states the shape: a verbatim prefix plus the handoff, not a discard', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.rollover.description).toContain('word for word')
+    expect(tools.rollover.description).toContain('your handoff is still written and still delivered on top of it')
+    expect(tools.rollover.description).toContain('you keep the base and drop the trail')
+  })
+
+  it('names the situation it is for: the value sits before the stretch being dropped', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.rollover.description).toContain('worth keeping is what came BEFORE some stretch')
+    expect(tools.rollover.description).toContain('worth only the few sentences you can state')
+  })
+
+  it('says neither move deletes anything', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.rollover.description).toContain('Neither move deletes anything')
+    expect(tools.rollover.description).toContain('replaces what you see rather than what was recorded')
+  })
+
+  it('keeps the checkpoint description agreeing about what comes back', () => {
+    const tools = createContinuityTools(adapterSpy().adapter)
+    expect(tools.checkpoint.description).toContain('reopens the conversation prefix through that turn, word for word')
+    expect(tools.checkpoint.description).toContain('carries your handoff on top of it')
+    expect(tools.checkpoint.description).toContain('nothing else about the world comes back with you')
   })
 })
 
