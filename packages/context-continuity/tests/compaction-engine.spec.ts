@@ -20,6 +20,7 @@ import {
   type ContinuitySummarizationInput,
 } from '../src/compaction-engine.ts'
 import { DEFAULT_COMPACTION_TEMPLATE } from '../src/compaction-template.ts'
+import { clearPendingSummary, offerPendingSummary } from '../src/pending-summary.ts'
 import { conversation } from './session-fixture.ts'
 
 /** The body the faked summarization call returns. */
@@ -129,6 +130,39 @@ describe('the continuity compaction engine', () => {
     const { options, result } = await summarizeOnce()
     expect(options.purpose).toBe('compaction')
     expect(result.llmStreamCall).toBe(true)
+    expect(result.summary).toEqual([{ type: 'text', text: BODY }])
+  })
+
+  it('hands back the summary the subject wrote, marked as no call at all', async () => {
+    // The backend's result type admits a summarizer that identifies no
+    // `ctx.llm.stream()` call. A subject-authored summary is exactly that, so the
+    // record must not claim a call that never happened — and no call may be made.
+    const { engine, requests } = backend()
+    const agent = routedAgent()
+    offerPendingSummary(agent.session, 'MY OWN CHECKPOINT')
+    const result = await engine.summarizeNow({ messages: [] }, agent)
+    expect(result.summary).toEqual([{ type: 'text', text: 'MY OWN CHECKPOINT' }])
+    expect(result.llmStreamCall).toBeUndefined()
+    expect(result.rawOutput).toBeUndefined()
+    expect(requests).toEqual([])
+  })
+
+  it('still reports the route the subject was working on', async () => {
+    const { engine } = backend()
+    const agent = routedAgent()
+    offerPendingSummary(agent.session, 'MY OWN CHECKPOINT')
+    const result = await engine.summarizeNow({ messages: [] }, agent)
+    expect(result.provider).toBe('p')
+    expect(result.model).toBe('m')
+  })
+
+  it('falls back to the template once the offered summary is cleared', async () => {
+    const { engine, requests } = backend()
+    const agent = routedAgent()
+    offerPendingSummary(agent.session, 'MY OWN CHECKPOINT')
+    clearPendingSummary(agent.session)
+    const result = await engine.summarizeNow({ messages: [] }, agent)
+    expect(finalInstruction(requests[0] as GenerateOptions)).toBe(DEFAULT_COMPACTION_TEMPLATE)
     expect(result.summary).toEqual([{ type: 'text', text: BODY }])
   })
 })

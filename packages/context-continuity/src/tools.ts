@@ -31,10 +31,14 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { compactContextRange, type ContextCompactionScope } from './compaction.ts'
 import { brief } from './context-ref.ts'
+import { clearPendingSummary, offerPendingSummary } from './pending-summary.ts'
 import type { ContextCompactible, ContextComposition, ContextTimeline } from './timeline.ts'
 
 /** The handoff byte budget; larger handoffs are rejected before they reach the log. */
 export const MAX_HANDOFF_CHARS = 32 * 1024
+
+/** The subject-authored summary budget; a longer one is rejected before it can be offered. */
+export const MAX_COMPACT_SUMMARY_CHARS = 32 * 1024
 
 /** How many related files one handoff may name. */
 export const MAX_RELATED_FILES = 32
@@ -111,6 +115,17 @@ export interface ContinuityToolText {
   /** When burying an anchor is worth it, spliced into the checkpoint description. */
   readonly checkpointGuidance?: string
   /**
+   * What a subject-authored compaction summary has to cover, spliced into the
+   * compact tool's `summary` parameter.
+   *
+   * The summary replaces a stretch the subject can no longer read, so this is the
+   * one place the engine states what such a replacement must not lose. The
+   * engine's default lists what cannot be recovered from anywhere else; a host
+   * adds what only its domain knows — a ledger, a set of obligations, an
+   * external system's state.
+   */
+  readonly compactSummaryGuidance?: string
+  /**
    * The pre-rollover discipline for a subject that owns background work,
    * spliced into the rollover description.
    *
@@ -165,6 +180,7 @@ const DEFAULT_TEXT: Required<Omit<ContinuityToolText, 'carriedContext' | 'jobsNo
   // both instances of that, and neither is the general case.
   checkpointGuidance: 'Record one whenever the context you are in now is one you might want back: before a long dig or a change you may want to abandon — anywhere the value will be the conclusion rather than the trail — just after something important got settled, before leaving the main line for a long errand, and before a stretch likely to fill the window with bulk (long files, large tool output, a build loop). Recording one is cheap and work continues in the next turn, so most checkpoints are never returned to; whether a return is worth making stays your judgement.',
   timelineGuidance: '',
+  compactSummaryGuidance: 'Write it for a reader who has none of this conversation and cannot read the stretch you are replacing: state the objective and the action in flight, the facts you established and whether you verified each one or only heard it, what you owe others and what you are waiting on, the decisions with their reasons, every change you have already made outside this conversation, and the single next step. Name paths, identifiers and values exactly instead of reproducing their contents. It must be shorter than the stretch it replaces, or the replacement is refused.',
   topicNoun: 'topic',
   topicNounPlural: 'topics',
 }
@@ -244,7 +260,7 @@ function statusDescription(text: Required<ContinuityToolText>): string {
  * it does not write.
  */
 function compactDescription(): string {
-  return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. The summary is written for you from that stretch, not by you: if a particular passage has to survive in your own words, keep it in front of you instead (a checkpoint return keeps an older prefix verbatim). Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
+  return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. Pass `summary` to write that replacement yourself and choose what survives; omit it and the engine writes one from that stretch instead, which is the only option left when the context is shortened on your behalf (at the hard limit, or after the provider refuses an oversized request). The stretch being replaced is not readable afterward, so anything that has to survive belongs in it. Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
 }
 
 /**
@@ -427,6 +443,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     jobsNote: text.jobsNote ?? defaultJobsNote(text.subjectNoun ?? DEFAULT_TEXT.subjectNoun),
     carriedContext: text.carriedContext ?? defaultCarriedContext(text.subjectNoun ?? DEFAULT_TEXT.subjectNoun),
     timelineGuidance: text.timelineGuidance ?? DEFAULT_TEXT.timelineGuidance,
+    compactSummaryGuidance: text.compactSummaryGuidance ?? DEFAULT_TEXT.compactSummaryGuidance,
     topicNoun: text.topicNoun ?? DEFAULT_TEXT.topicNoun,
     topicNounPlural: text.topicNounPlural ?? DEFAULT_TEXT.topicNounPlural,
   }
@@ -554,9 +571,9 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
   const compact = defineTool({
     name: CONTEXT_COMPACT_TOOL_NAME,
     description: compactDescription(),
-    // No arguments in this version: the subject says "shorten this context", and
-    // how much of it is safe to replace is the engine's own decision.
-    parameters: {},
+    parameters: {
+      summary: { type: 'string', description: `Optional. The checkpoint to put in place of the stretch being replaced, written by you. Supply it to choose what survives; omit it and the engine writes one for you from that stretch. ${wording.compactSummaryGuidance}` },
+    },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
         status: { type: 'string', required: true },
@@ -567,7 +584,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
       } },
       render: (_args, value) => [{ type: 'text', text: renderCompaction(value) }],
     },
-    async execute(_args, exec) {
+    async execute(args, exec) {
       const agent = exec.agent
       if (agent === undefined) {
         return { status: 'unavailable', reason: 'this call carries no agent, so it has no context to shorten' }
@@ -576,10 +593,18 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
       if (scope === undefined) {
         return { status: 'unavailable', reason: 'this agent scope mounts no compaction engine' }
       }
+      const summary = typeof args.summary === 'string' ? args.summary : ''
+      if (summary.length > MAX_COMPACT_SUMMARY_CHARS) {
+        throw new Error(`context_compact summary exceeds ${MAX_COMPACT_SUMMARY_CHARS} characters; it has to be smaller than the stretch it replaces`)
+      }
       // The durable surface is the only witness that can tell a failed
       // transaction from one that already replaced part of its span, so the
       // failure text claims "unchanged" only where that witness agrees.
       const generation = agent.session.surface.replaceGeneration
+      // Offered for the duration of this attempt only: the engine reads it while
+      // summarizing, and every outcome — replacement, no safe range, rejection —
+      // leaves nothing behind for a later automatic compaction to reuse.
+      if (summary.trim() !== '') offerPendingSummary(agent.session, summary)
       let attempt: Awaited<ReturnType<typeof compactContextRange>>
       try {
         attempt = await compactContextRange(scope, agent, exec.signal)
@@ -589,6 +614,8 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
         throw new Error(`context_compact failed: ${detail}. ${unchanged
           ? 'This context is unchanged.'
           : 'A replacement may already be on this context; read this context again before deciding what to do.'}`)
+      } finally {
+        clearPendingSummary(agent.session)
       }
       if (attempt.kind === 'none') return { status: 'nothing', reason: attempt.reason }
       return {

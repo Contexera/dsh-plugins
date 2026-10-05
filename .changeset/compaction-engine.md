@@ -6,11 +6,28 @@
 
 <h3 id="cn-v0-3-0-engine">中文</h3>
 
-新增 `ContinuityCompactionEngine`：用本包的通用模板写摘要的压缩后端。宿主把它挂在原本挂 `@deepseek-ai/dsh-compaction-basic` 的位置即可。
+新增 `ContinuityCompactionEngine`：用本包的通用模板写摘要的压缩后端。宿主把它挂在原本挂 `@deepseek-ai/dsh-compaction-basic` 的位置即可。`context_compact` 同时新增可选参数 `summary`，**主体可以自己写这份替换文本**。
 
 **为什么需要一个引擎类**
 
 上一笔导出了通用模板，但**模板说了不算**——摘要由宿主挂载的引擎写，而那个引擎写的是它自己那套面向通用编码会话的模板。**模板只有从引擎内部才能生效**，所以本包自己出一个引擎。只覆盖 `summarize()`；选区间、保留策略、定价、压缩锁、触发策略、替换事务全部继承。
+
+**主体自己写摘要（`context_compact(summary)`）**
+
+压缩可能因主体的调用而开始，也可能**在主体毫无机会参与时**被强行开始，而**「谁来写摘要」在两种情况下答案不同**：
+
+- **主体请求压缩**（`context_compact`）：它清楚这段里什么不能丢，所以**直接把替换文本写在同一次调用里**，不额外多一轮。
+- **在主体没有机会参与时被强行压缩**（硬上限、或 provider 拒收过长请求）：这时只能由引擎按模板写——**这就是模板永远不能撤掉的原因**。
+
+`summary` 省略或留空时行为与之前完全一致，引擎照旧按模板写。
+
+**为什么这不需要改上游**
+
+上游 `CompactionEngine.summarize()` 的**返回值就是替换掉那段上下文的内容**，而且它的返回类型**明确允许一个不发起 LLM 调用的写手**（原文：*"an unmarked template, remote, or other summarizer"*，`llmStreamCall?: never`）。所以主体写的文本按**未标记**结果交回：事务不会伪称发生过一次并不存在的调用。**代价**：这份文本仍要短于被替换的那段，否则替换被拒——这是个可恢复的失败（工具会说上下文未变），主体可以写短些再试一次。
+
+**这份文本怎么从工具走到引擎**
+
+`summarize()` 只拿到重放后的输入与 agent，没有别的入参，所以主体写的摘要得**带外**送到引擎。通道是 `pending-summary.ts`：按 **Session 对象**（不是 session id，`agent.session` 是同一个只读实例）弱引用键控，**由发起那次调用的工具在 `finally` 里清除**，而不是由读方消费——因为一次尝试可能多次摘要，而**失败的尝试绝不能把一份陈旧摘要留给下一次自动压缩**。它留在这里而不是做成跨包契约，是因为两端都属于本包。
 
 **为什么重新发起那次调用，而不是委托父类**
 
@@ -32,19 +49,36 @@ class HouseStyle extends ContinuityCompactionEngine {
 
 **兼容性**
 
-纯新增：新增一个导出与一个子路径导出 `@wowyuarm/dsh-context-continuity/compaction-engine`，新增 peer `@deepseek-ai/dsh-compaction-basic`（同 DSH 那条线）。**不挂这个类就完全没有行为变化**——宿主挂原版 `compaction-basic` 仍受支持。0.x 下按 minor 升到 `0.3.0`。
+纯新增：新增一个导出与一个子路径导出 `@wowyuarm/dsh-context-continuity/compaction-engine`，新增 peer `@deepseek-ai/dsh-compaction-basic`（同 DSH 那条线），`context_compact` 新增一个**可选**参数。**不挂这个类就完全没有行为变化**——宿主挂原版 `compaction-basic` 仍受支持，`summary` 不传时行为也和以前一样。0.x 下按 minor 升到 `0.3.0`。
 
 **验证**
 
-typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套通过（10 个文件）。新增 `compaction-engine.spec.ts` 5 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
+typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套 **321/321 通过**（10 个文件）。`compaction-engine.spec.ts` 8 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确；**交出 `summary` 时原样返回该文本、且一次 stream 请求都不发**（连路由仍照常报告）。`tools.spec.ts` 新增 4 例，钉住：参数表只有 `summary` 一项；这份文本**只为这一次尝试存在**，成功、无可压缩区间、失败三条路径都不留残留；省略时不留；超限摘要被拒且**引擎根本不被调用**。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
 
 <h3 id="en-v0-3-0-engine">English</h3>
 
-Adds `ContinuityCompactionEngine`: a compaction backend that writes summaries with this package's general template. A host mounts it where it would otherwise mount `@deepseek-ai/dsh-compaction-basic`.
+Adds `ContinuityCompactionEngine`: a compaction backend that writes summaries with this package's general template. A host mounts it where it would otherwise mount `@deepseek-ai/dsh-compaction-basic`. `context_compact` also gains an optional `summary` parameter, so **the subject can write that replacement text itself**.
 
 **Why an engine class is needed**
 
 The previous change exported a general template, but **a template on its own decides nothing** — summaries are written by whichever engine a host mounts, and that engine writes them from its own coding-session wording. **The template can only take effect from inside the engine**, so this package now ships one. Only `summarize()` is overridden; selection, retention, pricing, the compaction lock, trigger policy and the replacement transaction are all inherited.
+
+**The subject writes the summary (`context_compact(summary)`)**
+
+Compaction can start because the subject asked for it, or **be forced on it at a moment when it has no chance to take part**, and **"who writes the summary" has a different answer in each case**:
+
+- **The subject asks for it** (`context_compact`): it knows what in that stretch must not be lost, so it **writes the replacement text in the same call** — no extra round trip.
+- **It is forced on the subject** (the hard limit, or a provider refusing an oversized request): no subject can take part at that moment, so the engine writes from the template — **which is why the template can never be removed**.
+
+Omitting `summary`, or passing it blank, behaves exactly as before: the engine writes from the template.
+
+**Why this needs no upstream change**
+
+Upstream `CompactionEngine.summarize()`'s **return value is the content that replaces the stretch**, and its result type **explicitly admits a summarizer that issues no LLM call** (*"an unmarked template, remote, or other summarizer"*, `llmStreamCall?: never`). Subject-written text is therefore handed back as an **unmarked** result: the transaction never claims a call that did not happen. **The cost**: that text still has to be shorter than the stretch it replaces, or the replacement is refused — a recoverable failure (the tool says the context is unchanged) that the subject can retry shorter.
+
+**How the text reaches the engine**
+
+`summarize()` receives only the replayed input and the agent, so a subject-written summary has to arrive **out of band**. The channel is `pending-summary.ts`: a weak map keyed by the **Session object** (not the session id — `agent.session` is one stable readonly instance) and **cleared in a `finally` by the call that offered it**, not consumed by the reader — because one attempt may summarize more than once, and **a failed attempt must never leave a stale summary for the next automatic compaction to pick up**. It lives here rather than in a shared contract because both ends belong to this package.
 
 **Why the call is re-issued rather than delegated**
 
@@ -66,8 +100,8 @@ This package's import allowlist had one exception (jev). This is the second, wit
 
 **Compatibility**
 
-Purely additive: one new export plus a subpath export, `@wowyuarm/dsh-context-continuity/compaction-engine`, and a new peer, `@deepseek-ai/dsh-compaction-basic`, on the same DSH line. **Mounting this class is the only way to see a behavior change** — a host that keeps the stock `compaction-basic` row remains supported. At 0.x this is a minor bump to `0.3.0`.
+Purely additive: one new export plus a subpath export, `@wowyuarm/dsh-context-continuity/compaction-engine`, a new peer, `@deepseek-ai/dsh-compaction-basic`, on the same DSH line, and one new **optional** parameter on `context_compact`. **Mounting this class is the only way to see a behavior change** — a host that keeps the stock `compaction-basic` row remains supported, and behavior with no `summary` is unchanged. At 0.x this is a minor bump to `0.3.0`.
 
 **Verification**
 
-Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes across 10 files. The new `compaction-engine.spec.ts` adds 5 cases pinning that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; and that the call's `purpose` and returned envelope are right. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.
+Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes **321/321 across 10 files**. `compaction-engine.spec.ts` (8 cases) pins that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; that the call's `purpose` and returned envelope are right; and that **a supplied `summary` comes back verbatim with zero stream requests issued** (the route is still reported). `tools.spec.ts` adds 4 cases pinning that the parameter table holds `summary` alone; that the text **exists for that one attempt only** — nothing is left behind on the success, no-safe-range, or failure path; that omitting it leaves nothing; and that an oversized summary is rejected **with the engine never called**. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.

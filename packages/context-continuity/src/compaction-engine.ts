@@ -40,6 +40,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import type { ResolvedConfig } from '@deepseek-ai/dsh-compaction-basic'
 import { DEFAULT_COMPACTION_TEMPLATE } from './compaction-template.ts'
+import { pendingSummaryFor } from './pending-summary.ts'
 
 /**
  * The replayed conversation surface this engine condenses. Mirrors
@@ -101,7 +102,14 @@ export class ContinuityCompactionEngine extends BasicCompactionEngine {
   protected readonly template: string = DEFAULT_COMPACTION_TEMPLATE
 
   /**
-   * Summarize the replayed region under this engine's template.
+   * Summarize the replayed region under this engine's template, or hand back the
+   * summary the subject wrote for this attempt.
+   *
+   * A subject-authored summary is returned as an **unmarked** result: the backend
+   * types allow a summarizer that identifies no `ctx.llm.stream()` call, which is
+   * exactly what this is, and the transaction records it as such rather than
+   * claiming a call that never happened. The routed target is still reported,
+   * because that is the route the subject was working on when it wrote the text.
    *
    * The routed target is resolved exactly as the base resolves it — configured
    * summarization fields first, then the conversation's own last routed target,
@@ -114,6 +122,14 @@ export class ContinuityCompactionEngine extends BasicCompactionEngine {
     signal?: AbortSignal,
   ): Promise<ContinuitySummaryResult> {
     const target = summarizationTarget(this.config, agent)
+    const authored = pendingSummaryFor(agent.session)
+    if (authored !== undefined) {
+      return {
+        summary: [{ type: 'text', text: authored }],
+        provider: target.provider,
+        model: target.model,
+      }
+    }
     const assembler = new BlockAssembler()
     const messages: RequestMessage[] = [
       ...input.messages,

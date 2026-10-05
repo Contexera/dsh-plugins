@@ -33,6 +33,7 @@ import {
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
+  MAX_COMPACT_SUMMARY_CHARS,
   MAX_HANDOFF_CHARS,
   MAX_RELATED_FILES,
   createContinuityTools,
@@ -41,6 +42,7 @@ import {
   type ContinuityTools,
   type RolloverToolRequest,
 } from '../src/tools.ts'
+import { pendingSummaryFor } from '../src/pending-summary.ts'
 import type { ContextTimeline, ContextTimelineItem } from '../src/timeline.ts'
 import { engineSpy, meterOf, priced } from './compaction-doubles.ts'
 import { agentOn, conversation } from './session-fixture.ts'
@@ -170,10 +172,15 @@ describe('createContinuityTools: the declared contract', () => {
       .toEqual(['context_rollover', 'context_checkpoint', 'context_status', 'context_compact'])
   })
 
-  it('declares the compaction tool without arguments, because the range is the engine decision', () => {
+  it('declares the compaction tool without a range, because the range is the engine decision', () => {
     const tools = createContinuityTools(adapterSpy().adapter)
+    // `summary` chooses what survives; which stretch is safe to replace never
+    // becomes an argument, so a subject cannot aim the replacement itself.
+    expect(Object.keys((tools.compact.parameters as { properties?: Record<string, unknown> }).properties ?? {}))
+      .toEqual(['summary'])
     expect(argumentViolations(tools.compact, {})).toEqual([])
     expect(argumentViolations(tools.compact, { olderThan: 1 })).toEqual([])
+    expect(argumentViolations(tools.compact, { summary: 'a checkpoint' })).toEqual([])
   })
 
   it('declares the handoff as required and accepts an undeclared root key', () => {
@@ -543,6 +550,56 @@ describe('context_compact: a supported composition may have no engine', () => {
     expect(outputViolations(tools.compact, value)).toEqual([])
   })
 
+  it('offers a subject-written summary to the engine for the attempt, then leaves nothing behind', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const agent = agentOn(session)
+    // The spy stands in for the engine, so reading the channel from inside the
+    // call is what proves the summary is visible to whoever writes the summary.
+    const seen: Array<string | undefined> = []
+    const engine = engineSpy({ before: inner => seen.push(pendingSummaryFor(inner)) })
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agent)
+    await valueOf<Record<string, unknown>>(tools.compact, { summary: 'MY OWN CHECKPOINT' }, exec)
+    expect(seen).toEqual(['MY OWN CHECKPOINT'])
+    expect(pendingSummaryFor(session)).toBeUndefined()
+  })
+
+  it('offers nothing when the summary is omitted, so the engine writes its own', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const seen: Array<string | undefined> = []
+    const engine = engineSpy({ before: inner => seen.push(pendingSummaryFor(inner)) })
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agentOn(session))
+    await valueOf<Record<string, unknown>>(tools.compact, {}, exec)
+    expect(seen).toEqual([undefined])
+  })
+
+  it('leaves no summary behind when the attempt is rejected', async () => {
+    // Otherwise the next automatic compaction — which nobody wrote a summary for —
+    // would silently reuse this one.
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const engine = engineSpy({ fail: 'summarizer unavailable' })
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agentOn(session))
+    await expect(tools.compact.execute({ summary: 'MY OWN CHECKPOINT' }, exec))
+      .rejects.toThrow('context_compact failed: summarizer unavailable. This context is unchanged.')
+    expect(pendingSummaryFor(session)).toBeUndefined()
+  })
+
+  it('rejects a summary larger than one compaction may install', async () => {
+    const session = conversation({ turns: 4, system: 'You are a test agent.' })
+    const engine = engineSpy()
+    const spy = adapterSpy({ compactionFor: () => ({ engine: engine.engine }) })
+    const tools = createContinuityTools(spy.adapter)
+    const { exec } = execution('call-compact', agentOn(session))
+    await expect(tools.compact.execute({ summary: 'x'.repeat(MAX_COMPACT_SUMMARY_CHARS + 1) }, exec))
+      .rejects.toThrow(`context_compact summary exceeds ${MAX_COMPACT_SUMMARY_CHARS} characters`)
+    expect(engine.calls).toEqual([])
+  })
+
   it('reports a failure that left this context unchanged', async () => {
     const session = conversation({ turns: 4, system: 'You are a test agent.' })
     const engine = engineSpy({ fail: 'summarizer unavailable' })
@@ -772,9 +829,11 @@ describe('text: a host rewords, it never weakens safety', () => {
     expect(tools.status.description).toContain('Structural only: no transcript content.')
     expect(tools.compact.description).toContain('The log is append-only')
     expect(tools.compact.description).toContain('It never switches generation and never returns to an anchor')
-    // The summary's authorship is what separates this tool from a checkpoint
-    // return, and a subject cannot tell from the arguments who writes it.
-    expect(tools.compact.description).toContain('The summary is written for you from that stretch, not by you')
+    // Authorship is what separates this tool from a checkpoint return, so the
+    // description has to name both modes: the subject writes the replacement, and
+    // the engine writes it when the subject has no chance to.
+    expect(tools.compact.description).toContain('Pass `summary` to write that replacement yourself')
+    expect(tools.compact.description).toContain('omit it and the engine writes one from that stretch instead')
   })
 
   it('splices host prose into the descriptions it belongs to', () => {
