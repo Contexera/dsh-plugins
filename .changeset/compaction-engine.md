@@ -59,13 +59,21 @@ class HouseStyle extends ContinuityCompactionEngine {
 
 本包的白名单原有唯一例外（jev）。这是第二条，理由记在 `ALLOWED_PACKAGES` 与 `AGENTS.md`：`dsh-compaction-basic` 是 Harness 的包、不是宿主包（"host 无关"禁的是导入宿主），且只被 `compaction-engine.ts` 引用。**买下的风险是实打实的**：这个子类跟着 Harness 版本走，上游一改 `summarize()` 的形状它就会断，而不是优雅降级。
 
+**子路径必须默认导出这个类**
+
+**预设按 `name:` 挂插件，而 loader 取的是模块的默认导出**（`vendor/loader/src/config/entry.ts`：`exports.default ?? exports`，结果交给只接受函数/类/`{ apply }` 的注册表）。所以 `@wowyuarm/dsh-context-continuity/compaction-engine` **必须默认导出**，只有具名导出的话，那一行会**静默地什么也不做**。原版 `dsh-compaction-basic` 正是这么导的。有一条测试专门钉住这件事（它复现 loader 的取法）。
+
 **兼容性**
 
 纯新增：新增一个导出与一个子路径导出 `@wowyuarm/dsh-context-continuity/compaction-engine`，新增 peer `@deepseek-ai/dsh-compaction-basic`（同 DSH 那条线），`context_compact` 新增一个**可选**参数。**不挂这个类就完全没有行为变化**——宿主挂原版 `compaction-basic` 仍受支持，`summary` 不传时行为也和以前一样。0.x 下按 minor 升到 `0.3.0`。
 
 **验证**
 
-typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套 **323/323 通过**（10 个文件）。`compaction-engine.spec.ts` 8 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确；**交出 `summary` 时原样返回该文本、且一次 stream 请求都不发**（连路由仍照常报告）。`tools.spec.ts` 新增 4 例，钉住：参数表只有 `summary` 一项；这份文本**只为这一次尝试存在**，成功、无可压缩区间、失败三条路径都不留残留；省略时不留；超限摘要被拒且**引擎根本不被调用**。`pressure.spec.ts` 新增 2 例，钉住：通知要主体自己写、并说清省略意味着什么；**没有压缩工具的那条路径绝不提这个参数**。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
+typecheck 0 错、`check:boundaries` 通过、build 产出 `lib/compaction-engine.js` 与 `.d.ts`、本包测试全套 **324/324 通过**（10 个文件）。`compaction-engine.spec.ts` 9 例，钉住：末条指令就是本包模板；**请求里绝不出现原版模板的招牌分节**（`super.summarize()` 回归时会红）；子类覆盖字段确实生效；未配置摘要目标时按会话路由；调用的 `purpose` 与返回信封正确；**交出 `summary` 时原样返回该文本、且一次 stream 请求都不发**（连路由仍照常报告）；**构建产物经 loader 取法取出的是那个类**（只留具名导出就会红）。`tools.spec.ts` 新增 4 例，钉住：参数表只有 `summary` 一项；这份文本**只为这一次尝试存在**，成功、无可压缩区间、失败三条路径都不留残留；省略时不留；超限摘要被拒且**引擎根本不被调用**。`pressure.spec.ts` 新增 2 例，钉住：通知要主体自己写、并说清省略意味着什么；**没有压缩工具的那条路径绝不提这个参数**。构造期还实测到一处真问题并修掉：模板若当成后端配置键会在父类的严格校验里抛 `unknown key`。
+
+**文档**
+
+`README.md` / `README.zh.md` 两处（工具说明、它怎么工作、接入方式）、`docs/integration.md` 新增 **seam 10「压缩后端」**（挂法、为什么必须默认导出、为什么模板永不撤掉、主体自写的通道与一次性、两份文本两种受众），并改掉 seam 6 里「`context_compact` 不接受参数」那句；`docs/principles.md` 的 P8 补上"写什么由主体决定、模板是没有主体在场时的兜底"。
 
 <h3 id="en-v0-3-0-engine">English</h3>
 
@@ -122,10 +130,18 @@ class HouseStyle extends ContinuityCompactionEngine {
 
 This package's import allowlist had one exception (jev). This is the second, with its reason recorded in `ALLOWED_PACKAGES` and `AGENTS.md`: `dsh-compaction-basic` is a Harness package, not a host package (the host-agnostic rule forbids importing a *host*), and it is referenced by `compaction-engine.ts` alone. **The risk bought is real**: this subclass tracks Harness releases, and a change to `summarize()`'s shape breaks it rather than degrading gracefully.
 
+**The subpath must default-export the class**
+
+**A preset mounts a plugin by `name:`, and the loader takes a module's default export** (`vendor/loader/src/config/entry.ts`: `exports.default ?? exports`, handed to a registry that accepts only a function, a class, or `{ apply }`). So `@wowyuarm/dsh-context-continuity/compaction-engine` **must default-export the class**; with a named export alone that preset line would **silently do nothing**. The stock `dsh-compaction-basic` exports its engine the same way. A test pins this by reproducing the loader's own unwrap.
+
 **Compatibility**
 
 Purely additive: one new export plus a subpath export, `@wowyuarm/dsh-context-continuity/compaction-engine`, a new peer, `@deepseek-ai/dsh-compaction-basic`, on the same DSH line, and one new **optional** parameter on `context_compact`. **Mounting this class is the only way to see a behavior change** — a host that keeps the stock `compaction-basic` row remains supported, and behavior with no `summary` is unchanged. At 0.x this is a minor bump to `0.3.0`.
 
 **Verification**
 
-Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes **323/323 across 10 files**. `compaction-engine.spec.ts` (8 cases) pins that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; that the call's `purpose` and returned envelope are right; and that **a supplied `summary` comes back verbatim with zero stream requests issued** (the route is still reported). `tools.spec.ts` adds 4 cases pinning that the parameter table holds `summary` alone; that the text **exists for that one attempt only** — nothing is left behind on the success, no-safe-range, or failure path; that omitting it leaves nothing; and that an oversized summary is rejected **with the engine never called**. `pressure.spec.ts` adds 2 cases pinning that the notice asks for a subject-written summary and states what omitting it means, and that **the path with no compaction tool never mentions the argument**. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.
+Typecheck clean, `check:boundaries` passes, build emits `lib/compaction-engine.js` and its `.d.ts`, and the package's full suite passes **324/324 across 10 files**. `compaction-engine.spec.ts` (9 cases) pins that the final instruction is this package's template; that **the stock template's signature sections never appear in the request** (a `super.summarize()` regression turns it red); that a subclass override takes effect; that an unconfigured target follows the conversation's route; that the call's `purpose` and returned envelope are right; that **a supplied `summary` comes back verbatim with zero stream requests issued** (the route is still reported); and that **the built module unwraps to that class through the loader's own rule** (a named export alone turns it red). `tools.spec.ts` adds 4 cases pinning that the parameter table holds `summary` alone; that the text **exists for that one attempt only** — nothing is left behind on the success, no-safe-range, or failure path; that omitting it leaves nothing; and that an oversized summary is rejected **with the engine never called**. `pressure.spec.ts` adds 2 cases pinning that the notice asks for a subject-written summary and states what omitting it means, and that **the path with no compaction tool never mentions the argument**. Construction also surfaced a real defect, now fixed: passing the template as a backend config key throws the base's strict `unknown key` validation.
+
+**Documentation**
+
+`README.md` and `README.zh.md` (the tool list, how it works, how to adopt it), a new **seam 10, "the compaction backend"**, in `docs/integration.md` (the mount, why the default export matters, why the template is never removable, the one-attempt channel for a subject-written summary, and the two texts' two audiences), the seam 6 line that said `context_compact` takes no arguments, and P8 in `docs/principles.md` (what the checkpoint says is the subject's choice; the template is the fallback for when no subject is present).

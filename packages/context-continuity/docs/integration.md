@@ -29,9 +29,13 @@ Every seam below is **shipped**: implemented and unit-tested in this package.
 | Retrieval ladder (`createSearchTools`, `SearchScopeProvider`) | shipped |
 | Pressure policy (`ContextPressurePolicy`) | shipped |
 | Long-gap gate (`relatednessFor` + `judgeFor`, optional) | shipped |
+| Compaction backend (`ContinuityCompactionEngine`, optional) | shipped |
 
 Everything a host reaches for is exported from the package root
-(`@wowyuarm/dsh-context-continuity`).
+(`@wowyuarm/dsh-context-continuity`). The one exception is the compaction
+backend, which is **also** reachable as the subpath
+`@wowyuarm/dsh-context-continuity/compaction-engine` so a preset can mount it by
+name (seam 10).
 
 ## The one-paragraph model
 
@@ -339,8 +343,8 @@ const tools = createContinuityTools({
   `status: 'unavailable'` with a reason. That is a supported composition (mount no
   engine, get no compaction), so the model reads what happened instead of guessing;
   the tool never silently no-ops.
-- **The engine chooses the range; you never pass one.** `context_compact` takes no
-  arguments. The engine picks the largest older stretch that is safe: it never
+- **The engine chooses the range; you never pass one.** `context_compact` takes
+  no range argument. The engine picks the largest older stretch that is safe: it never
   starts on a leading `system/message`, never reaches the newest `user/message` or
   anything after it, retreats off any edge that would split a tool call from its
   result, and prices the recent tail through your `meter` (keeping `retainTokens`,
@@ -351,6 +355,11 @@ const tools = createContinuityTools({
   holds. `measure(session)` is called again after the replacement, so the reported
   `usageTokens` is the post-compaction reading; a scope with no meter reports no
   total rather than one it cannot verify.
+- **What survives is the subject's choice; where the boundary falls is not.**
+  `summary` is the one argument `context_compact` declares, and it replaces the
+  stretch the engine selected — a subject can never aim the replacement, only
+  write what stands in for it. Omit it and the engine writes one from the same
+  stretch, which is the only option when a reduction is forced (seam 10).
 - **A failure says whether this context moved.** A rejection from the engine
   surfaces as `context_compact failed: <message>`, followed by either "This context
   is unchanged." or — when the durable surface's `replaceGeneration` advanced —
@@ -413,8 +422,8 @@ const tools = createContinuityTools({
   engine-owned and survive any override. The compaction description's four
   non-negotiables are engine-owned for the same reason: it replaces what the
   subject sees rather than what was recorded, it never switches generation, the
-  summary is written by the engine rather than by the subject, and it
-  states what happened instead of implying success.
+  subject may write the replacement itself while the engine writes one when no
+  subject is present, and it states what happened instead of implying success.
 - **The contract is deliberately generic.** A tool value carries `ref`, `label`,
   and `affectedTopics`, not one host's words for a Thread or a Claim: the same
   factory serves every host. Your render-facing vocabulary belongs in `text`.
@@ -669,6 +678,82 @@ if (decision.kind === 'hold') {
 - **The thresholds are defaults, not policy.** `DEFAULT_GATE_TOKENS` and
   `DEFAULT_GATE_IDLE_MS` are exported; the third constructor argument overrides
   them per policy.
+
+## Seam 10 — the compaction backend (shipped, opt-in)
+
+Seam 6 hands `context_compact` a way to shorten a context. That way is a
+Harness compaction engine, and **which engine a host mounts is what decides who
+writes the summary**. This package ships one, so the wording can be its own
+rather than whichever engine happened to be mounted.
+
+```yaml
+# In a preset, where the stock backend would otherwise be mounted. Keep your own
+# row id, and carry over whatever config that row already had.
+- id: compaction-basic
+  name: '@wowyuarm/dsh-context-continuity/compaction-engine'
+  config:
+    auto: false
+```
+
+```ts
+import { ContinuityCompactionEngine, DEFAULT_COMPACTION_TEMPLATE } from '@wowyuarm/dsh-context-continuity'
+
+// A host that wants different wording subclasses; no config key is involved.
+class HouseStyle extends ContinuityCompactionEngine {
+  protected override readonly template = '…your checkpoint structure…'
+}
+```
+
+- **Mounting it is optional, and it is the only thing that changes the wording.**
+  A host that keeps the stock `@deepseek-ai/dsh-compaction-basic` row keeps
+  working exactly as before; the template and subject-authored summaries simply
+  never apply. This is why the seam is opt-in: the engine is one assembly
+  decision, not a new contract every host must meet.
+- **The subpath default-exports the class, and that is what makes the `name:`
+  form work.** The loader resolves an entry's `name` to a module and then takes
+  **its default export** (`vendor/loader/src/config/entry.ts`), handing the result
+  to a registry that accepts only a function, a class, or an `{ apply }` object —
+  a module namespace is none of those. The stock backend is mounted the same way
+  and default-exports its class for the same reason. The package root also
+  exports the class by name for hosts that mount it from their own code.
+- **Wording is changed by subclassing, not by a config key.** Cordis validates a
+  plugin's config against the `Config` schema it inherits, and this package does
+  not own the backend's schema; a `template` key would mean depending on the
+  schema library purely to add one field. `template` is a `protected` field.
+- **The template is the fallback, so it is never removable.** A summary is
+  written by the subject when the subject is there to write one, and by the
+  engine when it is not: at the hard limit, or after the provider refuses an
+  oversized request, no subject is present to be asked. A host that overrides
+  the field is changing that fallback, not replacing it.
+- **The subject may write the replacement itself.** `context_compact` takes an
+  optional `summary`, which becomes the content that replaces the stretch — and
+  which the engine hands back as an **unmarked** result, because the backend's
+  result type admits a summarizer that issues no `llm.stream()` call. Nothing in
+  the transaction claims a call that did not happen.
+- **The offer lasts one attempt.** The text reaches the engine out of band, keyed
+  by the Session and cleared by the call that offered it — never consumed by the
+  read, because one attempt may summarize more than once, and a failed attempt
+  must not leave a stale summary for the next automatic compaction to reuse. That
+  channel is internal to this package (`pending-summary`), so no host wiring is
+  involved and no cross-package contract is created.
+- **The subject-written text must still be smaller than the stretch it
+  replaces.** The engine prices the framed summary against the shadowed content
+  and refuses a replacement that does not shrink it; the tool reports that as a
+  recoverable failure ("This context is unchanged."), so the model can retry
+  shorter.
+- **Two texts, two audiences.** The template is written for a compaction engine
+  ("Condense the conversation ABOVE", and rules such as "do not mention this
+  summarization request"). The prose a subject reads when deciding what to write
+  is `compactSummaryGuidance` in `ContinuityToolText`, spliced into the tool's
+  `summary` parameter. Keep them aligned in intent; do not collapse them into one
+  string, because the engine's voice is wrong for a subject writing its own
+  checkpoint.
+- **The pressure notice asks for that summary by name.** Where a subject's scope
+  can compact, the notice steers it to call `context_compact` **with a summary it
+  writes itself** and says what omitting it means. That matters most where the
+  engine's own automatic listeners are off (`auto: false`, as the Team preset
+  sets): the notice is then the only soft trigger, so it is also the only place
+  the subject is asked to write anything.
 
 ## Compatibility red lines (durable identity)
 

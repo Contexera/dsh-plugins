@@ -42,15 +42,20 @@ every plugin that adopts this gives its agents the same set:
   which earlier spots are safe to return to.
 - **`context_compact`** — shorten the Session you are in: one older stretch behind
   you becomes a summary, your recent work stays verbatim, and you keep working
-  here. The log stays append-only, so the summary replaces what the agent sees,
-  not what was recorded.
+  here. Pass a `summary` and **you write that replacement yourself**, choosing
+  what survives; omit it and the engine writes one from the same stretch. The log
+  stays append-only, so the summary replaces what the agent sees, not what was
+  recorded.
 - **pressure handling** — a heads-up when a Session is filling up, and a safe
   fallback at the limit, so the agent is never forced to switch at a bad moment.
-  With the optional `@wowyuarm/dsh-jev` peer installed and a host that supplies
-  the view, a Session that is still large after a long absence starts a fresh
-  generation before the new request runs: the request is quoted into the
-  instruction that asks for the handoff, and the request itself is handed over
-  either way, so nothing the human sent is lost.
+  The notice asks the agent to shorten its own context with a summary it writes,
+  and the fallback — at the limit, or when the provider refuses an oversized
+  request — is the engine writing one from its template, since no agent is there
+  to be asked. With the optional `@wowyuarm/dsh-jev` peer installed and a host
+  that supplies the view, a Session that is still large after a long absence
+  starts a fresh generation before the new request runs: the request is quoted
+  into the instruction that asks for the handoff, and the request itself is
+  handed over either way, so nothing the human sent is lost.
 
 Two more are **opt-in** — the agent only gets them if you mount `createSearchTools`
 yourself:
@@ -73,15 +78,25 @@ and treat the Session log as the source of truth. This plugin doesn't rebuild an
 of that — it adds the one thing on top the Harness leaves out: tying a string of
 Sessions together as the same agent over time. It handles the hard parts (the
 switch itself, the safety checks, working out which past spots are safe to return
-to) and asks your plugin only for what it can't figure out on its own. The
-reasoning is in [`docs/principles.md`](docs/principles.md).
+to) and asks your plugin only for what it can't figure out on its own.
+
+That includes the wording of a compaction summary. Summaries are written by
+whichever compaction engine a deployment mounts, so this package ships one
+(`ContinuityCompactionEngine`) that writes them from a general template ordered by
+what a successor **cannot** reconstruct — and lets the agent write the replacement
+itself when it is there to do so. Mounting it is one assembly decision, and a host
+that keeps the stock engine is unaffected. The reasoning is in
+[`docs/principles.md`](docs/principles.md); the mount and the seams are in
+[`docs/integration.md`](docs/integration.md).
 
 ## Using it in your plugin
 
 You tell it who your agent is and how to run a Session switch in your own setup —
 plus, if you mount the search tools, which past Sessions each subject is allowed to
-search. It does the rest. The step-by-step guide, with code, is
-[`docs/integration.md`](docs/integration.md).
+search. It does the rest. To make compaction summaries use this package's wording
+(and to let the agent write them itself), mount `ContinuityCompactionEngine` where
+you would otherwise mount the stock compaction backend — seam 10 of the guide. The
+step-by-step guide, with code, is [`docs/integration.md`](docs/integration.md).
 
 ## Development
 

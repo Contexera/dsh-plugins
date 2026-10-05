@@ -31,12 +31,14 @@ Session 写满的 agent 都能用——
 - **`context_status`** —— 读当前 context 的状态：用了多少 token、离两个预算还有多远、
   token 由什么组成、现在能压掉多少，以及哪些早先的位置能安全返回。
 - **`context_compact`** —— 就地压短当前 Session：身后一段较早的历史换成摘要，最近的工作原样
-  保留，你继续在这里干。日志仍是 append-only：摘要换掉的是 agent 看到的东西，不是记录下来的
-  东西。
+  保留，你继续在这里干。传 `summary` 就**由你自己写这份替换文本**，由你决定什么该留下；不传
+  则由引擎从同一段里写一份。日志仍是 append-only：摘要换掉的是 agent 看到的东西，不是记录
+  下来的东西。
 - **压力兜底** —— Session 快满时提前提醒，到上限时给一个安全退路，agent 不会被迫在糟糕的
-  时机切换。装了可选的 `@wowyuarm/dsh-jev` peer、且宿主供得上相应视图时：隔了很久才回来、
-  context 又还很大，就先换代再跑新请求——那条请求会被引到换代指令里，无论换不换得成都会
-  原样交回手上，人发的东西不会丢。
+  时机切换。提醒会要 agent 用**自己写的摘要**就地压短；到上限、或 provider 拒收过长请求时
+  没有 agent 在场可问，则由引擎按模板写一份。装了可选的 `@wowyuarm/dsh-jev` peer、且宿主
+  供得上相应视图时：隔了很久才回来、context 又还很大，就先换代再跑新请求——那条请求会被
+  引到换代指令里，无论换不换得成都会原样交回手上，人发的东西不会丢。
 
 另外两个是**可选的**——只有你自己挂载 `createSearchTools`，agent 才会拿到：
 
@@ -54,13 +56,20 @@ Session 索引，所以把索引关着的部署只会 fail closed，而不是返
 Harness 本身已经会 fork Session、从旧 Session 开一个新的、把 Session 日志当作唯一事实来源。
 这个插件不重造这些，而是在上面补一件 Harness 没做的事：把一串 Session 串成同一个 agent
 在时间里的延续。切换本身、安全检查、判断哪些历史位置能安全返回这些麻烦事它自己扛，只向你的
-插件要它自己没法知道的那点信息。背后的理由见 [`docs/principles.md`](docs/principles.md)。
+插件要它自己没法知道的那点信息。
+
+其中也包括**压缩摘要怎么写**。摘要由部署所挂载的那个压缩引擎写，所以本包自己出一个
+（`ContinuityCompactionEngine`）：按一份通用模板写，模板的排序依据是**后来者拿不回来**的东西；
+主体在场时，也可以由主体自己写这份替换文本。挂不挂它只是一个组装决定，继续用原版引擎的宿主
+不受影响。背后的理由见 [`docs/principles.md`](docs/principles.md)，挂法与各接缝见
+[`docs/integration.md`](docs/integration.md)。
 
 ## 在你的插件里用它
 
 你告诉它你的 agent 是谁、以及在你自己的环境里怎么执行一次 Session 切换——如果你还挂了检索
-工具，再告诉它允许搜哪些历史 Session，剩下的它来做。带代码的分步接入指南见
-[`docs/integration.md`](docs/integration.md)。
+工具，再告诉它允许搜哪些历史 Session，剩下的它来做。要让压缩摘要用本包的措辞（并让 agent
+能自己写），就把 `ContinuityCompactionEngine` 挂在原本挂原版压缩后端的位置——指南的 seam 10。
+带代码的分步接入指南见 [`docs/integration.md`](docs/integration.md)。
 
 ## 开发
 

@@ -31,6 +31,23 @@ Authority order:
     so the rule above still holds. The cost bought is a real coupling: the
     subclass tracks `summarize()` across Harness releases, and a change to that
     hook's shape breaks it rather than degrading gracefully.
+- **The compaction engine is the package's one mountable plugin entry.** The
+  package root is a library (no default export); `./compaction-engine` **is**
+  default-exported, because a preset mounts a module by its default export — the
+  loader takes `exports.default ?? exports` and hands it to a registry that
+  accepts only a function, a class, or `{ apply }`. Dropping that default export
+  turns the documented host adoption into a line that does nothing.
+- **Two compaction-summary authors, one fallback.** The subject writes the
+  replacement when it calls `context_compact` with `summary` (delivered to the
+  engine through `pending-summary.ts`, keyed by Session and cleared by the offering
+  call); the engine writes from the template when no subject is present — the hard
+  limit, or a provider refusing an oversized request. The template is therefore
+  never removable, and `summarize()` must keep its fallback branch. The two texts
+  serve different audiences on purpose: the template is written for a compaction
+  engine, `compactSummaryGuidance` in `ContinuityToolText` for a subject writing
+  its own checkpoint. The pressure notice asks for the subject-written form by
+  name; its total length is pinned under 1200 characters by `pressure.spec.ts`, so
+  the notice points at the argument rather than restating the structure.
 - **Section names in `message-codec.ts` are frozen.** They are read back out of
   logs written by earlier generations; changing one silently breaks decoding of
   its own history. The codec is parameterized by `pluginId` and the two

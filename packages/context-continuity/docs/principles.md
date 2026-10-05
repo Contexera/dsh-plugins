@@ -129,6 +129,13 @@ numbers, the default action, and the instruction to record durable knowledge
 before switching are the engine's, because a subject that loses context without
 them has lost work.
 
+What that checkpoint *says* is a choice the subject is asked to make, not one made
+for it. The notice steers a subject that can compact to write the replacement
+summary itself; the wording this package supplies is the fallback for the moments
+no subject is present to be asked — the hard limit, or a provider refusing an
+oversized request. Both texts are engine-owned for the same reason the tools are
+(P7): the summary is the part of a compaction the subject will otherwise lose.
+
 Two constraints keep this from becoming guesswork. An absent capability is never
 a failure: no meter, no compaction engine, no judge means the policy stays quiet,
 or refuses with a recoverable diagnostic, rather than inventing a substitute. And
