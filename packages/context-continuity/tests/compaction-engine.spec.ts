@@ -165,4 +165,18 @@ describe('the continuity compaction engine', () => {
     expect(finalInstruction(requests[0] as GenerateOptions)).toBe(DEFAULT_COMPACTION_TEMPLATE)
     expect(result.summary).toEqual([{ type: 'text', text: BODY }])
   })
+
+  it('default-exports the class, because a preset mounts a module by its default export', async () => {
+    // The loader resolves a preset entry's `name` to a module and then takes the
+    // module's DEFAULT export (`vendor/loader/src/config/entry.ts`), passing the
+    // result to the plugin registry — which accepts only a function, a class, or
+    // an `{ apply }` object. A namespace object is none of those, so a named
+    // export alone cannot be mounted by name: this assertion is what keeps the
+    // documented host adoption from being a line that silently does nothing.
+    const module = await import('../src/compaction-engine.ts') as { default?: unknown }
+    // The loader's own unwrap, reproduced: `exports.default ?? exports`.
+    const mounted = module.default ?? module
+    expect(typeof mounted).toBe('function')
+    expect(mounted).toBe(ContinuityCompactionEngine)
+  })
 })

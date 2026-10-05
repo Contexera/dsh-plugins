@@ -253,11 +253,12 @@ function statusDescription(text: Required<ContinuityToolText>): string {
  * What the compaction tool is for, worded the way the model must read it. Four
  * facts are not negotiable in any host's rewrite: the replacement is of what the
  * subject sees rather than of what was recorded, it never switches generation,
- * the summary is written by the engine rather than by the subject, and the
- * result states what happened instead of implying success. The third is the one
- * that decides between this tool and a checkpoint return: a subject that needs a
- * particular stretch preserved in its own words cannot get that from a summary
- * it does not write.
+ * the subject may write the replacement itself but the engine writes one when the
+ * subject is absent, and the result states what happened instead of implying
+ * success. The third is what decides between this tool and a checkpoint return:
+ * a subject that needs a particular stretch preserved in its own words has to
+ * write the summary, because a checkpoint return keeps a prefix verbatim while a
+ * compaction replaces the stretch it covers.
  */
 function compactDescription(): string {
   return 'context_compact: shorten this context generation in place. One stretch of older history behind you is replaced by a summary; your most recent work stays verbatim. The log is append-only — the summary replaces what you see, not what was recorded. Pass `summary` to write that replacement yourself and choose what survives; omit it and the engine writes one from that stretch instead, which is the only option left when the context is shortened on your behalf (at the hard limit, or after the provider refuses an oversized request). The stretch being replaced is not readable afterward, so anything that has to survive belongs in it. Call it right after you close a piece of work and this context has grown large. It never switches generation and never returns to an anchor: use context_rollover for those. The result names the stretch that was replaced and what it cost, or says there was nothing safe to compact; a failure says so and reports whether this context changed.'
