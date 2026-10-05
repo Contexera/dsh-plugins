@@ -103,6 +103,11 @@ export type {
 } from './compaction.ts'
 
 export {
+  DEFAULT_COMPACTION_SECTIONS,
+  DEFAULT_COMPACTION_TEMPLATE,
+} from './compaction-template.ts'
+
+export {
   CONTEXT_SEARCH_RESULT_LIMIT,
   CONTEXT_READ_BEFORE,
   CONTEXT_READ_AFTER,
