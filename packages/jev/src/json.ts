@@ -5,7 +5,7 @@
  * object from a string, an array or `null` is the same check on both sides. It
  * lives in one module so the two sides cannot drift into disagreeing about what
  * an object is.
- * @module @wowyuarm/dsh-jev/json
+ * @module @contexera/dsh-jev/json
  */
 
 /**

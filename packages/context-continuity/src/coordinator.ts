@@ -22,7 +22,7 @@
  * latch that keeps the admission gate armed for that turn, and both exits from
  * it: a rollover carries the input into the next generation, and a turn that
  * ends with no rollover hands the input back once the driver converges.
- * @module @wowyuarm/dsh-context-continuity/coordinator
+ * @module @contexera/dsh-context-continuity/coordinator
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'

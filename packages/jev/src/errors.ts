@@ -1,7 +1,7 @@
 /**
  * The one error type this package raises, and the redaction every message goes
  * through on the way out.
- * @module @wowyuarm/dsh-jev/errors
+ * @module @contexera/dsh-jev/errors
  */
 
 /**

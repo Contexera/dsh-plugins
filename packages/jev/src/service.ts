@@ -7,7 +7,7 @@
  * sends the questions it is given, returns the vendor's answers, and raises a
  * typed {@link JevError} when there are none. A caller that needs a default for
  * a failed judgement is the one that decides what the default is.
- * @module @wowyuarm/dsh-jev/service
+ * @module @contexera/dsh-jev/service
  */
 
 import { Service, type Context, type Logger } from '@deepseek-ai/cordis'

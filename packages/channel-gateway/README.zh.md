@@ -31,7 +31,7 @@
 本包是一个 DSH bundle，安装即插入 gateway service 行：
 
 ```sh
-dsh plugin add @wowyuarm/dsh-channel-gateway --profile <profile>
+dsh plugin add @contexera/dsh-channel-gateway --profile <profile>
 ```
 
 适配器是**可选行**（各自需要凭据），由 profile 自己加：
@@ -39,10 +39,10 @@ dsh plugin add @wowyuarm/dsh-channel-gateway --profile <profile>
 ```yaml
 - insert:
     - id: channel-telegram
-      name: '@wowyuarm/dsh-channel-gateway/telegram'
+      name: '@contexera/dsh-channel-gateway/telegram'
       config: { token: '<bot token>' }
     - id: channel-weixin
-      name: '@wowyuarm/dsh-channel-gateway/weixin'
+      name: '@contexera/dsh-channel-gateway/weixin'
       config: { token: '<iLink bot token>' }
 ```
 
@@ -63,7 +63,7 @@ dsh plugin add @wowyuarm/dsh-channel-gateway --profile <profile>
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@wowyuarm/dsh-channel-gateway'
+import type {} from '@contexera/dsh-channel-gateway'
 
 export const name = 'my-ingress'
 export const inject = ['channels']
@@ -80,8 +80,8 @@ export function apply(ctx: Context) {
 
 | 适配器 | 传输 | 入口 | 说明 |
 | --- | --- | --- | --- |
-| Telegram | Bot API 长轮询（`getUpdates`） | `@wowyuarm/dsh-channel-gateway/telegram` | 文本与媒体。附件优先用本地字节（`data`）上传，否则用 provider `ref` 或 URL；`resolveAttachment` 通过下载取回入站附件的字节。`format: 'markdown'` 渲染为 Telegram HTML。`config.token` 缺省回落到 `DSH_TELEGRAM_TOKEN`。 |
-| 微信 | iLink 长轮询（`ilink/bot/getupdates`） | `@wowyuarm/dsh-channel-gateway/weixin` | 文本与媒体。回复要带上入站消息的 `context_token`，微信侧约两分钟后过期，发送前会刷新已过期的 token。`format: 'markdown'` 渲染为清洗后的微信 Markdown。媒体的上传/下载按 iLink 参考协议实现，**尚未在真实账号上验证**。需要一个已获得的 token——扫码登录流程尚未实现。 |
+| Telegram | Bot API 长轮询（`getUpdates`） | `@contexera/dsh-channel-gateway/telegram` | 文本与媒体。附件优先用本地字节（`data`）上传，否则用 provider `ref` 或 URL；`resolveAttachment` 通过下载取回入站附件的字节。`format: 'markdown'` 渲染为 Telegram HTML。`config.token` 缺省回落到 `DSH_TELEGRAM_TOKEN`。 |
+| 微信 | iLink 长轮询（`ilink/bot/getupdates`） | `@contexera/dsh-channel-gateway/weixin` | 文本与媒体。回复要带上入站消息的 `context_token`，微信侧约两分钟后过期，发送前会刷新已过期的 token。`format: 'markdown'` 渲染为清洗后的微信 Markdown。媒体的上传/下载按 iLink 参考协议实现，**尚未在真实账号上验证**。需要一个已获得的 token——扫码登录流程尚未实现。 |
 
 两个适配器都尊重 `HTTPS_PROXY`/`NO_PROXY`（Node 自带 fetch 默认不读这两个变量）。
 
@@ -105,7 +105,7 @@ peer 区间保持 `^4.0.1` / `^3.18.1`：下界容纳旧 DSH 线，上界容纳�
 针对正在运行的 DSH 复验：
 
 ```sh
-pnpm --filter @wowyuarm/dsh-channel-gateway build
+pnpm --filter @contexera/dsh-channel-gateway build
 cat > /tmp/channel-gateway.yml <<'EOF'
 - insert:
     - id: channel-gateway
@@ -122,13 +122,13 @@ dsh --profile <profile> --patch /tmp/channel-gateway.yml --help
 
 ```sh
 pnpm install    # 在仓库根执行一次
-pnpm --filter @wowyuarm/dsh-channel-gateway typecheck  # tsc，strict
-pnpm --filter @wowyuarm/dsh-channel-gateway test       # 边界守卫 + vitest
-pnpm --filter @wowyuarm/dsh-channel-gateway build      # 产出 lib/
+pnpm --filter @contexera/dsh-channel-gateway typecheck  # tsc，strict
+pnpm --filter @contexera/dsh-channel-gateway test       # 边界守卫 + vitest
+pnpm --filter @contexera/dsh-channel-gateway build      # 产出 lib/
 ```
 
 `src/` 只允许 import 自己的相对模块、Node 内置模块，以及 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`；
-适配器可额外使用 `undici`。`pnpm --filter @wowyuarm/dsh-channel-gateway check:boundaries` 强制这条线，
+适配器可额外使用 `undici`。`pnpm --filter @contexera/dsh-channel-gateway check:boundaries` 强制这条线，
 避免中立层悄悄长出宿主依赖。
 
 ## 许可

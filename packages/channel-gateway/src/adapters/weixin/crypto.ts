@@ -3,7 +3,7 @@
  * encrypted bytes this decrypts, an upload is bytes this encrypts. ECB with
  * PKCS7 padding matches the reference iLink client; the gateway only moves the
  * bytes, it does not choose the scheme.
- * @module @wowyuarm/dsh-channel-gateway/weixin/crypto
+ * @module @contexera/dsh-channel-gateway/weixin/crypto
  */
 
 import { createCipheriv, createDecipheriv } from 'node:crypto'

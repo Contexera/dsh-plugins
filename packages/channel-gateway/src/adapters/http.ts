@@ -1,7 +1,7 @@
 /**
  * The two transport facts every polling adapter shares: which fetch to use, and
  * how to wait without outliving a stop.
- * @module @wowyuarm/dsh-channel-gateway/adapters/http
+ * @module @contexera/dsh-channel-gateway/adapters/http
  */
 
 import { EnvHttpProxyAgent, fetch as undiciFetch } from 'undici'

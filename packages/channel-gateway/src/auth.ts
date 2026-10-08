@@ -6,7 +6,7 @@
  * cannot decide who may speak. The policy is an interface rather than a
  * configuration shape because pairing, OAuth, or a per-channel rule can arrive
  * later without changing the gateway core.
- * @module @wowyuarm/dsh-channel-gateway/auth
+ * @module @contexera/dsh-channel-gateway/auth
  */
 
 import type { ChannelActor, ChannelPlace, ChannelVisibility } from './contracts.ts'

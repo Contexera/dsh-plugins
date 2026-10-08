@@ -26,7 +26,7 @@
  * Selection and price are one decision, read twice: {@link compactibleNow}
  * reports the same span to a status read that {@link compactContextRange} would
  * hand to the engine.
- * @module @wowyuarm/dsh-context-continuity/compaction
+ * @module @contexera/dsh-context-continuity/compaction
  */
 
 import { toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'

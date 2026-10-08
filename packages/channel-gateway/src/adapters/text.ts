@@ -1,7 +1,7 @@
 /**
  * Text splitting primitives every adapter shares: breaking a message into
  * provider-sized chunks without cutting a word, or a Unicode character, in two.
- * @module @wowyuarm/dsh-channel-gateway/adapters/text
+ * @module @contexera/dsh-channel-gateway/adapters/text
  */
 
 /** Whether one UTF-16 unit is the first half of a surrogate pair. */

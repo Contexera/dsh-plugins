@@ -32,9 +32,9 @@ Every seam below is **shipped**: implemented and unit-tested in this package.
 | Compaction backend (`ContinuityCompactionEngine`, optional) | shipped |
 
 Everything a host reaches for is exported from the package root
-(`@wowyuarm/dsh-context-continuity`). The one exception is the compaction
+(`@contexera/dsh-context-continuity`). The one exception is the compaction
 backend, which is **also** reachable as the subpath
-`@wowyuarm/dsh-context-continuity/compaction-engine` so a preset can mount it by
+`@contexera/dsh-context-continuity/compaction-engine` so a preset can mount it by
 name (seam 10).
 
 ## The one-paragraph model
@@ -54,7 +54,7 @@ Pick the id type your domain already has, and describe a subject as its id plus
 the Session it is bound to right now.
 
 ```ts
-import type { ContextSubject } from '@wowyuarm/dsh-context-continuity'
+import type { ContextSubject } from '@contexera/dsh-context-continuity'
 
 type SubjectId = AgentTeamMemberId          // Team
 // type SubjectId = IndividualId            // Loom (one value, always the same)
@@ -72,7 +72,7 @@ The codec writes and reads the durable handoff and checkpoint-continuation
 messages, through the shipped `plugin` snapshot form. Construct it once.
 
 ```ts
-import { ContextMessageCodec } from '@wowyuarm/dsh-context-continuity'
+import { ContextMessageCodec } from '@contexera/dsh-context-continuity'
 
 const codec = new ContextMessageCodec({
   pluginId: '@wowyuarm/dsh-agent-team',                              // your plugin's stable id
@@ -96,7 +96,7 @@ delivery, carry candidates, open calls, turn cursors). You contribute only your
 domain's ref naming and your timeline anchors, through `ContextProjectionHost`.
 
 ```ts
-import { createContextProjectionDefinition, type ContextProjectionHost } from '@wowyuarm/dsh-context-continuity'
+import { createContextProjectionDefinition, type ContextProjectionHost } from '@contexera/dsh-context-continuity'
 
 const projectionHost: ContextProjectionHost = {
   // Durable, collision-resistant refs. Two Sessions repeating one provider
@@ -127,7 +127,7 @@ Register the fold with the Harness projection framework, which owns the drive
 (replay, incremental application, persistence, invalidation):
 
 ```ts
-import { createContextProjectionDefinition } from '@wowyuarm/dsh-context-continuity'
+import { createContextProjectionDefinition } from '@contexera/dsh-context-continuity'
 
 // Register ONCE for the whole host — not once per Session. The framework keeps
 // one unit per projection key, and this engine's state carries the Session
@@ -164,7 +164,7 @@ Implement `ContextContinuityHost<SubjectId>` and drive the coordinator from your
 Session-event dispatch.
 
 ```ts
-import { ContextContinuityCoordinator, type ContextContinuityHost } from '@wowyuarm/dsh-context-continuity'
+import { ContextContinuityCoordinator, type ContextContinuityHost } from '@contexera/dsh-context-continuity'
 
 const host: ContextContinuityHost<SubjectId> = {
   agentForSubject:   (id) => handles.get(id)?.agent,
@@ -224,7 +224,7 @@ walk, the dedupe, the pricing, and the shared restorable-anchor rule; you supply
 the mechanism it cannot have as a pure library.
 
 ```ts
-import { readContextTimeline } from '@wowyuarm/dsh-context-continuity'
+import { readContextTimeline } from '@contexera/dsh-context-continuity'
 
 const timeline = await readContextTimeline({
   current: {
@@ -282,7 +282,7 @@ argument contract, the anti-forgery gate, the `concludeTurn()` timing, the
 compaction range, and the render shapes; you perform every effect.
 
 ```ts
-import { createContinuityTools } from '@wowyuarm/dsh-context-continuity'
+import { createContinuityTools } from '@contexera/dsh-context-continuity'
 
 const tools = createContinuityTools({
   // resolve the calling execution to its subject, then answer/act
@@ -437,7 +437,7 @@ budgets, and the return-anchor verdict; you own authorization, the query
 capability, the fold configuration, and the meter.
 
 ```ts
-import { createSearchTools } from '@wowyuarm/dsh-context-continuity'
+import { createSearchTools } from '@contexera/dsh-context-continuity'
 
 const tools = createSearchTools({
   subject: exec => subjectOf(exec),
@@ -526,7 +526,7 @@ meter, the reduction capability, the steer, and what the notice calls whatever
 the subject is holding.
 
 ```ts
-import { ContextPressurePolicy } from '@wowyuarm/dsh-context-continuity'
+import { ContextPressurePolicy } from '@contexera/dsh-context-continuity'
 
 const pressure = new ContextPressurePolicy<MemberId>({
   pluginId: AGENT_TEAM_PLUGIN_ID,               // whose notice this is, on read-back
@@ -595,7 +595,7 @@ input. Two optional host members switch the gate on; omit either and the gate
 stays off, which is a supported deployment and never a failure.
 
 ```ts
-import { ContextPressurePolicy, DEFAULT_GATE_TOKENS } from '@wowyuarm/dsh-context-continuity'
+import { ContextPressurePolicy, DEFAULT_GATE_TOKENS } from '@contexera/dsh-context-continuity'
 
 const pressure = new ContextPressurePolicy<MemberId>({
   /* … seam 8 … */
@@ -690,13 +690,13 @@ rather than whichever engine happened to be mounted.
 # In a preset, where the stock backend would otherwise be mounted. Keep your own
 # row id, and carry over whatever config that row already had.
 - id: compaction-basic
-  name: '@wowyuarm/dsh-context-continuity/compaction-engine'
+  name: '@contexera/dsh-context-continuity/compaction-engine'
   config:
     auto: false
 ```
 
 ```ts
-import { ContinuityCompactionEngine, DEFAULT_COMPACTION_TEMPLATE } from '@wowyuarm/dsh-context-continuity'
+import { ContinuityCompactionEngine, DEFAULT_COMPACTION_TEMPLATE } from '@contexera/dsh-context-continuity'
 
 // A host that wants different wording subclasses; no config key is involved.
 class HouseStyle extends ContinuityCompactionEngine {

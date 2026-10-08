@@ -12,7 +12,7 @@
  * The row carries everything a deployment may vary, including where the key
  * comes from. It carries no secret: name an environment variable with
  * `apiKeyEnv` and put the key there.
- * @module @wowyuarm/dsh-jev
+ * @module @contexera/dsh-jev
  */
 
 import type { Context } from '@deepseek-ai/cordis'

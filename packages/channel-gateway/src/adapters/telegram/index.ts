@@ -6,7 +6,7 @@
  * and reply policy are implemented above it, from `channel/inbound`. The
  * transport is adapted from `dsh-telegram-channel` (MIT), reduced to the Bot
  * API calls this adapter needs.
- * @module @wowyuarm/dsh-channel-gateway/telegram
+ * @module @contexera/dsh-channel-gateway/telegram
  */
 
 import type { Context } from '@deepseek-ai/cordis'

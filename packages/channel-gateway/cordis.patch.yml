@@ -4,11 +4,11 @@
 #
 #   - insert:
 #       - id: channel-telegram
-#         name: '@wowyuarm/dsh-channel-gateway/telegram'
+#         name: '@contexera/dsh-channel-gateway/telegram'
 #         config: { token: '<bot token>' }
 #       - id: channel-weixin
-#         name: '@wowyuarm/dsh-channel-gateway/weixin'
+#         name: '@contexera/dsh-channel-gateway/weixin'
 #         config: { token: '<ilink bot token>' }
 - insert:
     - id: channel-gateway
-      name: '@wowyuarm/dsh-channel-gateway'
+      name: '@contexera/dsh-channel-gateway'

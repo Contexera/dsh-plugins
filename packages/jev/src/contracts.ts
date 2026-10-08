@@ -5,7 +5,7 @@
  * invention. A question is `noul`, `choice` or `score`; answers come back under
  * the ids the caller chose. This package adds no vocabulary of its own and
  * interprets nothing: it transports questions and returns answers.
- * @module @wowyuarm/dsh-jev/contracts
+ * @module @contexera/dsh-jev/contracts
  */
 
 /**

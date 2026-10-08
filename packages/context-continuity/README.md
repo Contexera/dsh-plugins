@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-[![npm](https://img.shields.io/npm/v/@wowyuarm/dsh-context-continuity?style=flat-square)](https://www.npmjs.com/package/@wowyuarm/dsh-context-continuity)
+[![npm](https://img.shields.io/npm/v/@contexera/dsh-context-continuity?style=flat-square)](https://www.npmjs.com/package/@contexera/dsh-context-continuity)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 **Let a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) agent
@@ -102,9 +102,9 @@ step-by-step guide, with code, is [`docs/integration.md`](docs/integration.md).
 
 ```bash
 pnpm install    # once, at the repository root
-pnpm --filter @wowyuarm/dsh-context-continuity test       # boundary check + unit tests
-pnpm --filter @wowyuarm/dsh-context-continuity typecheck  # strict TypeScript, no emit
-pnpm --filter @wowyuarm/dsh-context-continuity build      # emit lib/
+pnpm --filter @contexera/dsh-context-continuity test       # boundary check + unit tests
+pnpm --filter @contexera/dsh-context-continuity typecheck  # strict TypeScript, no emit
+pnpm --filter @contexera/dsh-context-continuity build      # emit lib/
 ```
 
 Tests run against the published `@deepseek-ai/dsh-*` packages — no sibling Harness

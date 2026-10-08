@@ -4,7 +4,7 @@
  * The transport is an injected function rather than a `fetch` call inside the
  * service for one reason: every test in this package drives a stub and runs
  * offline, in milliseconds, with no key and no network.
- * @module @wowyuarm/dsh-jev/transport
+ * @module @contexera/dsh-jev/transport
  */
 
 /** One attempt, fully resolved: where to send it, what to send, and how to cancel it. */

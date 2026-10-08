@@ -1,4 +1,50 @@
-# @wowyuarm/dsh-jev
+# @contexera/dsh-jev
+
+## 0.1.2
+
+### Patch Changes
+
+- [中文](#cn-v0-1-2) | [English](#en-v0-1-2)
+
+  <h3 id="cn-v0-1-2">中文</h3>
+
+  **改了什么**
+
+  - 包名迁到 `@contexera/dsh-jev`；`@wowyuarm/dsh-jev` 停在 0.1.1，已标记废弃并指向新名。
+  - profile 行自己的 `id`（`jev`）、配置键与请求/应答的形状都不变，已有配置照用。
+
+  **兼容性**
+
+  - 本包不声明 DSH peer，这条关系不变。
+  - `dsh-context-continuity` 里指向它的可选 peer 会在引擎自己的下一次发布中换成新名。
+
+  **验证**
+
+  - 本地：`pnpm -r typecheck`、`pnpm -r test`（6 个文件 / 54 条测试）、`pnpm -r build` 全过，`check:peers` 通过。
+
+  ```sh
+  npm i @contexera/dsh-jev@0.1.2
+  ```
+
+  <h3 id="en-v0-1-2">English</h3>
+
+  **What changed**
+
+  - The package publishes as `@contexera/dsh-jev`; `@wowyuarm/dsh-jev` stays at 0.1.1 and is deprecated in favour of it.
+  - The profile row's own id (`jev`), its configuration keys, and the request/response shapes do not change, so existing configuration keeps working.
+
+  **Compatibility**
+
+  - This package declares no DSH peers; that relationship is unchanged.
+  - The optional peer naming it inside `dsh-context-continuity` moves to the new name in the engine's own next release.
+
+  **Verification**
+
+  - Local: `pnpm -r typecheck`, `pnpm -r test` (6 files / 54 tests) and `pnpm -r build` pass, and `check:peers` holds.
+
+  ```sh
+  npm i @contexera/dsh-jev@0.1.2
+  ```
 
 ## 0.1.1
 

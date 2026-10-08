@@ -9,7 +9,7 @@
  * mapping, streaming and agent access are implemented above this layer.
  *
  * Channel adapters live behind their own entries: `./telegram` and `./weixin`.
- * @module @wowyuarm/dsh-channel-gateway
+ * @module @contexera/dsh-channel-gateway
  */
 
 import type { Context } from '@deepseek-ai/cordis'

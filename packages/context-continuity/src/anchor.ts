@@ -14,7 +14,7 @@
  * never reads as a budget problem; and an unmeasurable source is never priced
  * as free, because "the budget cannot be proven" is exactly the state in which
  * a return must not be offered.
- * @module @wowyuarm/dsh-context-continuity/anchor
+ * @module @contexera/dsh-context-continuity/anchor
  */
 
 import type { ContextProjectionHost } from './projection.ts'

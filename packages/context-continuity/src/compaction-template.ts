@@ -1,7 +1,7 @@
 /**
  * The checkpoint template: what a compaction summary is asked to preserve.
  *
- * Choosing the span is {@link module:@wowyuarm/dsh-context-continuity/compaction
+ * Choosing the span is {@link module:@contexera/dsh-context-continuity/compaction
  * compaction}'s job; choosing what survives inside it is this module's. The two
  * belong to the same owner for one reason — this package already decides that a
  * stretch of context may be replaced, and a replacement is only as good as the
@@ -21,7 +21,7 @@
  * A host may replace the whole text. It is one string rather than a section
  * list on purpose: the section skeleton is the part worth tuning, so freezing
  * it here would freeze the finding above into this package.
- * @module @wowyuarm/dsh-context-continuity/compaction-template
+ * @module @contexera/dsh-context-continuity/compaction-template
  */
 
 /**

@@ -5,7 +5,7 @@
  * input and the agent, so a subject-authored summary has to reach it out of
  * band. This module is that channel, and it lives here rather than in a shared
  * contract because both ends are this package: `context_compact` writes it and
- * {@link module:@wowyuarm/dsh-context-continuity/compaction-engine
+ * {@link module:@contexera/dsh-context-continuity/compaction-engine
  * ContinuityCompactionEngine} reads it.
  *
  * It is keyed by the Session rather than by session id so an abandoned entry
@@ -15,7 +15,7 @@
  * compaction to pick up. Keying on the object is reliable because `agent.session`
  * is one stable readonly instance for an agent's whole life, so the writing tool
  * and the reading engine always see the same key.
- * @module @wowyuarm/dsh-context-continuity/pending-summary
+ * @module @contexera/dsh-context-continuity/pending-summary
  */
 
 import type { Session } from '@deepseek-ai/dsh-session'

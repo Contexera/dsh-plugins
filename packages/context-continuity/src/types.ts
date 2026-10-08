@@ -7,7 +7,7 @@
  * Individual, a solo long-running coding agent is its own single subject. The
  * engine never names the subject; it only needs a stable id and the Session
  * the subject is currently bound to.
- * @module @wowyuarm/dsh-context-continuity/types
+ * @module @contexera/dsh-context-continuity/types
  */
 
 import type { SessionId } from '@deepseek-ai/dsh-session'

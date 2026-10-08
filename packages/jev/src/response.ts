@@ -9,7 +9,7 @@
  * it missing. The members inside an answer are not checked — see
  * {@link JevResult.answers} — so what reaches a caller is the vendor's answer
  * and not this package's reconstruction of it.
- * @module @wowyuarm/dsh-jev/response
+ * @module @contexera/dsh-jev/response
  */
 
 import type { JevAnswer, JevResult } from './contracts.ts'

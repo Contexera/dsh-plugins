@@ -8,7 +8,7 @@
  * the result so no chunk exceeds the per-message limit or leaves a fenced code
  * block open. Like the Telegram renderer it is transport fidelity, asked for per
  * message through {@link OutboundMessage.format}; the rules follow nanobot (MIT).
- * @module @wowyuarm/dsh-channel-gateway/adapters/weixin-markdown
+ * @module @contexera/dsh-channel-gateway/adapters/weixin-markdown
  */
 
 /**

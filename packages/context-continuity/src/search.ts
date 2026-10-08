@@ -16,7 +16,7 @@
  * is no cursor, page size, session id, or event-type knob on the model surface
  * — a capped answer says so and asks for a narrower query, because paging a
  * model through raw rows is the failure mode this ladder exists to avoid.
- * @module @wowyuarm/dsh-context-continuity/search
+ * @module @contexera/dsh-context-continuity/search
  */
 
 import type { SessionId } from '@deepseek-ai/dsh-session'

@@ -9,7 +9,7 @@ public.
 
 | Face | Rule |
 | --- | --- |
-| Tag | `@wowyuarm/dsh-<name>@X.Y.Z` — the shape changesets gives a non-root package. A bare `vX.Y.Z` cannot name one of two packages. |
+| Tag | `<scope>/dsh-<name>@X.Y.Z`, in that package's own published scope — `@contexera` once it has moved, `@wowyuarm` until its own rename — the shape changesets gives a non-root package. A bare `vX.Y.Z` cannot name one of several packages. |
 | Tag target | The release commit: the one whose `package.json` carries that version and whose `CHANGELOG.md` holds that section. |
 | GitHub Release | Title = the tag, body = that version's `CHANGELOG.md` section verbatim, `--latest=false`. |
 | npm | The tarball `changeset publish` uploads. |
@@ -53,7 +53,7 @@ Two rules are not negotiable:
 
    ```sh
    pnpm release                        # build, then changeset publish
-   git tag -l '@wowyuarm/*'            # the tags publish just created
+   git tag -l '<scope>/*'            # the tags publish just created
    git push --dry-run origin 'refs/tags/<tag>:refs/tags/<tag>'
    git push origin 'refs/tags/<tag>:refs/tags/<tag>'
    ```
@@ -68,9 +68,9 @@ Two rules are not negotiable:
    previous version seconds after a publish:
 
    ```sh
-   curl -sf "https://registry.npmjs.org/@wowyuarm%2Fdsh-<name>/<version>" >/dev/null && echo ok
-   npm pack "@wowyuarm/dsh-<name>@<version>"        # compare its package.json with the workspace one
-   dsh plugin --profile <temp-profile> add "@wowyuarm/dsh-<name>@<version>"
+   curl -sf "https://registry.npmjs.org/<scope>%2Fdsh-<name>/<version>" >/dev/null && echo ok
+   npm pack "<scope>/dsh-<name>@<version>"        # compare its package.json with the workspace one
+   dsh plugin --profile <temp-profile> add "<scope>/dsh-<name>@<version>"
    ```
 
    Install the **exact version**: a version younger than the resolver's

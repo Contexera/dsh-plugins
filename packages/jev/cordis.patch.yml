@@ -10,4 +10,4 @@
 #       apiKeyEnv: TYPESAFE_API_KEY
 - insert:
     - id: jev
-      name: '@wowyuarm/dsh-jev'
+      name: '@contexera/dsh-jev'

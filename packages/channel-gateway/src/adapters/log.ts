@@ -1,7 +1,7 @@
 /**
  * What an adapter may say about itself. It is a slice of the host's logger, and
  * it is optional everywhere so a channel can be built and tested without one.
- * @module @wowyuarm/dsh-channel-gateway/adapters/log
+ * @module @contexera/dsh-channel-gateway/adapters/log
  */
 
 /** The two levels a transport loop needs: progress, and a failure worth reading. */

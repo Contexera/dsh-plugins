@@ -9,7 +9,7 @@
  * narrower — a description may be an empty string or `null`, and a structured
  * entry is the vendor's own `EntryType` — so no rule here rejects what the
  * vendor accepts.
- * @module @wowyuarm/dsh-jev/request
+ * @module @contexera/dsh-jev/request
  */
 
 import type { JevChoiceQuestion, JevEntry, JevNoulCriteria, JevRequest, JevScoreQuestion, JevState } from './contracts.ts'

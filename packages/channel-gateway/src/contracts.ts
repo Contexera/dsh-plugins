@@ -7,7 +7,7 @@
  * provider's id, session routing and visibility rules are implemented by a
  * consumer listening to `channel/inbound`, or by the code that calls
  * {@link OutboundMessage} sends.
- * @module @wowyuarm/dsh-channel-gateway/contracts
+ * @module @contexera/dsh-channel-gateway/contracts
  */
 
 /** Who sent one message, as the provider identifies them. */

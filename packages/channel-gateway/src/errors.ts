@@ -1,7 +1,7 @@
 /**
  * The one error type the gateway raises for a caller's mistake, plus the
  * message extraction every adapter needs when it reports a failure.
- * @module @wowyuarm/dsh-channel-gateway/errors
+ * @module @contexera/dsh-channel-gateway/errors
  */
 
 /**

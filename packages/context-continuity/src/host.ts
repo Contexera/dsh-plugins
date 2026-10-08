@@ -14,7 +14,7 @@
  * The Agent Team implements this over its Member ledger; a single-Individual
  * harness implements it over one Individual and its continuity store. Neither
  * shape leaks into the engine.
- * @module @wowyuarm/dsh-context-continuity/host
+ * @module @contexera/dsh-context-continuity/host
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'

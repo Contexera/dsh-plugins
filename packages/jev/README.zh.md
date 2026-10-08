@@ -30,7 +30,7 @@ System One）Cordis 服务：一次无头判断调用，`ctx.jev.decide(...)`。
 本包是 DSH bundle：装上即插入 Jev 服务行。
 
 ```sh
-dsh plugin add @wowyuarm/dsh-jev --profile <profile>
+dsh plugin add @contexera/dsh-jev --profile <profile>
 ```
 
 行里配置端点、模型与边界；密钥来自环境变量，配置文件里不留秘密：
@@ -65,7 +65,7 @@ fail-closed 吞掉之后、每个回合都失败一次。
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { JevError } from '@wowyuarm/dsh-jev'
+import { JevError } from '@contexera/dsh-jev'
 
 export const name = 'loom-after-chat'
 export const inject = ['jev']
@@ -136,7 +136,7 @@ export async function judge(ctx: Context, state: string, signal: AbortSignal): P
 对运行中的 DSH 复核：
 
 ```sh
-corepack pnpm --filter @wowyuarm/dsh-jev build
+corepack pnpm --filter @contexera/dsh-jev build
 cat > /tmp/jev.yml <<'EOF'
 - insert:
     - id: jev
@@ -154,9 +154,9 @@ dsh --profile <profile> --patch /tmp/jev.yml --help
 
 ```sh
 corepack pnpm install
-corepack pnpm --filter @wowyuarm/dsh-jev typecheck   # tsc，strict，不产出
-corepack pnpm --filter @wowyuarm/dsh-jev test        # 边界守卫 + vitest，全离线
-corepack pnpm --filter @wowyuarm/dsh-jev build       # 产出 lib/
+corepack pnpm --filter @contexera/dsh-jev typecheck   # tsc，strict，不产出
+corepack pnpm --filter @contexera/dsh-jev test        # 边界守卫 + vitest，全离线
+corepack pnpm --filter @contexera/dsh-jev build       # 产出 lib/
 ```
 
 `src/` 只允许 import 自己的相对模块、Node 内置模块，以及上面两个声明的 peer；`check:boundaries`

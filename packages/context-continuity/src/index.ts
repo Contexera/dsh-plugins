@@ -11,7 +11,7 @@
  * files, one continuous context in the subject's understanding. The engine owns
  * these mechanics generically; a host binds them to its own subject and domain
  * through {@link ContextContinuityHost} and {@link ContextSearchAdapter}.
- * @module @wowyuarm/dsh-context-continuity
+ * @module @contexera/dsh-context-continuity
  */
 
 export type {

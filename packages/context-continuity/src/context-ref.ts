@@ -8,7 +8,7 @@
  * revalidates the named Session against the host's authorization on each call.
  * The prefix is the format version; a future codec gets a new one, because refs
  * already written into a live conversation must keep decoding the way they did.
- * @module @wowyuarm/dsh-context-continuity/context-ref
+ * @module @contexera/dsh-context-continuity/context-ref
  */
 
 import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session'

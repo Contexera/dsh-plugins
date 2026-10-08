@@ -38,7 +38,7 @@ does not supply them in a usable form:
 The package is a DSH bundle: adding it inserts the gateway service row.
 
 ```sh
-dsh plugin add @wowyuarm/dsh-channel-gateway --profile <profile>
+dsh plugin add @contexera/dsh-channel-gateway --profile <profile>
 ```
 
 Channel adapters are opt-in rows, because each needs its own credentials. A
@@ -47,10 +47,10 @@ profile adds the ones it wants:
 ```yaml
 - insert:
     - id: channel-telegram
-      name: '@wowyuarm/dsh-channel-gateway/telegram'
+      name: '@contexera/dsh-channel-gateway/telegram'
       config: { token: '<bot token>' }
     - id: channel-weixin
-      name: '@wowyuarm/dsh-channel-gateway/weixin'
+      name: '@contexera/dsh-channel-gateway/weixin'
       config: { token: '<iLink bot token>' }
 ```
 
@@ -71,7 +71,7 @@ An empty `allow` list admits nobody.
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@wowyuarm/dsh-channel-gateway'
+import type {} from '@contexera/dsh-channel-gateway'
 
 export const name = 'my-ingress'
 export const inject = ['channels']
@@ -94,8 +94,8 @@ async function handle(message: InboundMessage) {
 
 | Adapter | Transport | Entry | Notes |
 | --- | --- | --- | --- |
-| Telegram | Bot API long poll (`getUpdates`) | `@wowyuarm/dsh-channel-gateway/telegram` | Text and media. An attachment sends from local bytes (`data`), else a provider `ref` or `url`; `resolveAttachment` reads an inbound attachment's bytes by download. `format: 'markdown'` renders as Telegram HTML. `DSH_TELEGRAM_TOKEN` is the fallback for `config.token`. |
-| Weixin | WeChat iLink long poll (`ilink/bot/getupdates`) | `@wowyuarm/dsh-channel-gateway/weixin` | Text and media. A reply quotes the inbound `context_token`, which WeChat expires after roughly two minutes; the adapter refreshes a stale one before sending. `format: 'markdown'` renders as sanitized WeChat Markdown. The media download/upload path follows the reference iLink protocol and is **not yet verified against a live account**. Starts from a token it is given — the QR login flow is not implemented yet. |
+| Telegram | Bot API long poll (`getUpdates`) | `@contexera/dsh-channel-gateway/telegram` | Text and media. An attachment sends from local bytes (`data`), else a provider `ref` or `url`; `resolveAttachment` reads an inbound attachment's bytes by download. `format: 'markdown'` renders as Telegram HTML. `DSH_TELEGRAM_TOKEN` is the fallback for `config.token`. |
+| Weixin | WeChat iLink long poll (`ilink/bot/getupdates`) | `@contexera/dsh-channel-gateway/weixin` | Text and media. A reply quotes the inbound `context_token`, which WeChat expires after roughly two minutes; the adapter refreshes a stale one before sending. `format: 'markdown'` renders as sanitized WeChat Markdown. The media download/upload path follows the reference iLink protocol and is **not yet verified against a live account**. Starts from a token it is given — the QR login flow is not implemented yet. |
 
 Both adapters honour `HTTPS_PROXY`/`NO_PROXY` (Node's own fetch does not, unless
 `NODE_USE_ENV_PROXY` is set).
@@ -123,7 +123,7 @@ against either without a second copy of cordis in the profile.
 Re-verify against a running DSH:
 
 ```sh
-pnpm --filter @wowyuarm/dsh-channel-gateway build
+pnpm --filter @contexera/dsh-channel-gateway build
 cat > /tmp/channel-gateway.yml <<'EOF'
 - insert:
     - id: channel-gateway
@@ -141,14 +141,14 @@ rather than the import alone, add a second row to the overlay that declares
 
 ```sh
 pnpm install    # once, at the repository root
-pnpm --filter @wowyuarm/dsh-channel-gateway typecheck  # tsc, strict
-pnpm --filter @wowyuarm/dsh-channel-gateway test       # boundary guard + vitest
-pnpm --filter @wowyuarm/dsh-channel-gateway build      # emits lib/
+pnpm --filter @contexera/dsh-channel-gateway typecheck  # tsc, strict
+pnpm --filter @contexera/dsh-channel-gateway test       # boundary guard + vitest
+pnpm --filter @contexera/dsh-channel-gateway build      # emits lib/
 ```
 
 `src/` may import only its own relative modules, Node builtins, and
 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery`; adapters may add `undici`.
-`pnpm --filter @wowyuarm/dsh-channel-gateway check:boundaries` enforces exactly
+`pnpm --filter @contexera/dsh-channel-gateway check:boundaries` enforces exactly
 that, so the neutral seam cannot quietly acquire a host dependency.
 
 ## License

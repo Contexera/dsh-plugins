@@ -26,7 +26,7 @@
  * {@link ContextProjectionHost.domainBoundaryOf}: which events are worth
  * returning to, and what a boundary is attributable to, is the host's
  * judgement, delivered as a plain contribution.
- * @module @wowyuarm/dsh-context-continuity/projection
+ * @module @contexera/dsh-context-continuity/projection
  */
 
 import { z } from 'zod'

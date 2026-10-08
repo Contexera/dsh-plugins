@@ -1,4 +1,4 @@
-# @wowyuarm/dsh-context-continuity
+# @contexera/dsh-context-continuity
 
 ## 0.3.0
 

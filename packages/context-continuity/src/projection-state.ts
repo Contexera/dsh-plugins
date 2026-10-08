@@ -18,7 +18,7 @@
  * attributed, is decided by the host through {@link DomainAnchorRule}. The Agent
  * Team anchors on committed messages, claim changes, and first Thread arrivals;
  * a single-Individual harness anchors on committed Input/Effect/Delivery facts.
- * @module @wowyuarm/dsh-context-continuity/projection-state
+ * @module @contexera/dsh-context-continuity/projection-state
  */
 
 /** One checkpoint recorded by a successful `context_checkpoint` call. */

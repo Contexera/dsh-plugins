@@ -5,7 +5,7 @@
  * It does not interpret messages: what a message means, where it goes next and
  * whether it was seen before are decided by whoever listens to the event or
  * calls {@link ChannelGateway.send}.
- * @module @wowyuarm/dsh-channel-gateway/gateway
+ * @module @contexera/dsh-channel-gateway/gateway
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'

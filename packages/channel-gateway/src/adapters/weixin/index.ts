@@ -13,7 +13,7 @@
  * ways through the iLink CDN — an inbound attachment comes back through
  * `resolveAttachment`, an outbound one goes up from its `data` — a path that
  * follows the reference protocol and is not yet verified against a live account.
- * @module @wowyuarm/dsh-channel-gateway/weixin
+ * @module @contexera/dsh-channel-gateway/weixin
  */
 
 import { readFileSync } from 'node:fs'

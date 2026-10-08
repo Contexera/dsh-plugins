@@ -11,7 +11,7 @@
  *
  * The approach follows nanobot's telegram renderer (MIT): protect code, render
  * the rest, restore code last.
- * @module @wowyuarm/dsh-channel-gateway/adapters/telegram-markdown
+ * @module @contexera/dsh-channel-gateway/adapters/telegram-markdown
  */
 
 import { ChannelGatewayError } from '../../errors.ts'

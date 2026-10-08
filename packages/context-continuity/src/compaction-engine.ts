@@ -28,7 +28,7 @@
  * A host that mounts the shipped `@deepseek-ai/dsh-compaction-basic` row instead
  * keeps the shipped template. That stays a supported composition: nothing in
  * this package requires its own engine to be mounted.
- * @module @wowyuarm/dsh-context-continuity/compaction-engine
+ * @module @contexera/dsh-context-continuity/compaction-engine
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -224,7 +224,7 @@ function summaryText(
  *
  * The loader resolves an entry's `name` to a module and then takes **its default
  * export**; a namespace object is not a plugin shape, so a named export alone
- * cannot be mounted as `name: '@wowyuarm/dsh-context-continuity/compaction-engine'`.
+ * cannot be mounted as `name: '@contexera/dsh-context-continuity/compaction-engine'`.
  * This mirrors `@deepseek-ai/dsh-compaction-basic`, which is mounted the same way
  * and therefore also default-exports its engine class.
  */

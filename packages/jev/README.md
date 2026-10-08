@@ -36,7 +36,7 @@ the retry policy are in [`docs/architecture.md`](docs/architecture.md).
 The package is a DSH bundle: adding it inserts the Jev service row.
 
 ```sh
-dsh plugin add @wowyuarm/dsh-jev --profile <profile>
+dsh plugin add @contexera/dsh-jev --profile <profile>
 ```
 
 The row carries the endpoint, the model and the bounds; the key comes from the
@@ -82,7 +82,7 @@ error text and response excerpts are redacted against it. `apiKeyEnv` defaults t
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { JevError } from '@wowyuarm/dsh-jev'
+import { JevError } from '@contexera/dsh-jev'
 
 export const name = 'loom-after-chat'
 export const inject = ['jev']
@@ -169,7 +169,7 @@ anything, so neither proves a row works on its own.
 Re-verify against a running DSH:
 
 ```sh
-corepack pnpm --filter @wowyuarm/dsh-jev build
+corepack pnpm --filter @contexera/dsh-jev build
 cat > /tmp/jev.yml <<'EOF'
 - insert:
     - id: jev
@@ -189,9 +189,9 @@ tell you on its own.
 
 ```sh
 corepack pnpm install
-corepack pnpm --filter @wowyuarm/dsh-jev typecheck   # tsc, strict, no emit
-corepack pnpm --filter @wowyuarm/dsh-jev test        # boundary guard + vitest, offline
-corepack pnpm --filter @wowyuarm/dsh-jev build       # emits lib/
+corepack pnpm --filter @contexera/dsh-jev typecheck   # tsc, strict, no emit
+corepack pnpm --filter @contexera/dsh-jev test        # boundary guard + vitest, offline
+corepack pnpm --filter @contexera/dsh-jev build       # emits lib/
 ```
 
 `src/` may import only its own relative modules, Node builtins, and the two

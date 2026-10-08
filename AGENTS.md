@@ -30,9 +30,9 @@ tsconfig.base.json    Shared compilerOptions; every package tsconfig extends it
 .changeset/           Independent per-package versioning
 .github/workflows/    One CI gate: pnpm -r typecheck / test / build on Linux + Windows
 packages/
-  channel-gateway/      @wowyuarm/dsh-channel-gateway
-  context-continuity/   @wowyuarm/dsh-context-continuity (see its AGENTS.md)
-  jev/                  @wowyuarm/dsh-jev
+  channel-gateway/      @contexera/dsh-channel-gateway
+  context-continuity/   @contexera/dsh-context-continuity (see its AGENTS.md)
+  jev/                  @contexera/dsh-jev
 ```
 
 Each package is self-contained: its own `package.json`, `tsconfig.json`
@@ -49,7 +49,7 @@ pnpm check:peers             # the DSH peer contract across packages (offline)
 pnpm -r typecheck            # strict TypeScript, no emit, every package
 pnpm -r test                 # each package's boundary check + unit tests
 pnpm -r build                # emit each package's lib/
-pnpm --filter @wowyuarm/dsh-context-continuity test   # one package only
+pnpm --filter @contexera/dsh-context-continuity test   # one package only
 ```
 
 Run the narrowest check for the surface you touched: a single package via

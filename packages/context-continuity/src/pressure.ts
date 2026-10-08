@@ -37,7 +37,7 @@
  * host's own producer kind — format V4 admits nothing else — and the latch
  * below recognizes both that kind and the read-time conversion of the released
  * rows written before it.
- * @module @wowyuarm/dsh-context-continuity/pressure
+ * @module @contexera/dsh-context-continuity/pressure
  */
 
 import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'

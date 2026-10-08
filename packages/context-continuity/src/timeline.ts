@@ -29,7 +29,7 @@
  * {@link ContextTimeline.incompleteFrom}: history is then complete through the
  * last listed generation and provably absent beyond it. It is never a
  * subject-availability fact, and the truncation is never silent.
- * @module @wowyuarm/dsh-context-continuity/timeline
+ * @module @contexera/dsh-context-continuity/timeline
  */
 
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'

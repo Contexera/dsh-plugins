@@ -13,7 +13,7 @@
  * without being one, and can describe a state the world has since left. And a
  * hit that is not current may have been replaced or abandoned, so the model
  * must read it as history rather than as the state of the work.
- * @module @wowyuarm/dsh-context-continuity/search-tools
+ * @module @contexera/dsh-context-continuity/search-tools
  */
 
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
