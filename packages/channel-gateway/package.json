@@ -1,6 +1,6 @@
 {
   "name": "@contexera/dsh-channel-gateway",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Channel gateway for DeepSeek Harness: normalize provider traffic into one message contract, announce inbound messages as one typed event, authorize at the transport boundary.",
   "license": "MIT",
   "repository": {
