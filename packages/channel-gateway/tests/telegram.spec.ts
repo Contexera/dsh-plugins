@@ -1,5 +1,8 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { TELEGRAM_MAX_TEXT_LENGTH, createTelegramChannel } from '../src/adapters/telegram/index.ts'
+import { FormData as PairedFormData } from '../src/adapters/http.ts'
 import type { ChannelInbox, InboundMessage, OutboundMessage } from '../src/contracts.ts'
 import { ChannelGatewayError } from '../src/errors.ts'
 
@@ -404,6 +407,143 @@ describe('telegram channel', () => {
     })
 
     expect(result.providerMessageId).toBe('9')
-    expect(uploaded instanceof FormData).toBe(true)
+    // The paired `FormData`, not the global one: an injected fetch cannot tell
+    // the two apart, so this assertion is about which class the adapter builds
+    // with, and the socket-level test below is the one that catches a mismatch.
+    expect(uploaded instanceof PairedFormData).toBe(true)
+    const form = uploaded as InstanceType<typeof PairedFormData>
+    expect(form.get('chat_id')).toBe('1')
+    expect(form.get('document')).toBeInstanceOf(Blob)
+  })
+
+  it('puts a real multipart body on the wire, with and without a proxy configured', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5])
+    await withRealBotApi(async (apiBaseUrl, requests) => {
+      const upload = async (): Promise<void> => {
+        // No injected fetch: this drives the adapter's own transport choice.
+        const channel = createTelegramChannel({ token: 'T', apiBaseUrl })
+        const result = await channel.send({
+          channel: 'telegram',
+          route: 'chat:1',
+          text: '',
+          attachments: [{ kind: 'file', name: 'a.txt', data: bytes }],
+        })
+        expect(result.providerMessageId).toBe('9')
+      }
+
+      const noProxy = { HTTPS_PROXY: undefined, HTTP_PROXY: undefined, https_proxy: undefined, http_proxy: undefined }
+      await withProxyEnv(noProxy, upload)
+      // The shape every proxied deployment runs: a proxy variable is set, and
+      // loopback is exempt. Pointing it at a dead port also proves the upload
+      // was not proxied, so reaching the server at all is part of the assertion.
+      await withProxyEnv(
+        { ...noProxy, HTTPS_PROXY: 'http://127.0.0.1:1', NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' },
+        upload,
+      )
+
+      expect(requests.map(request => request.method)).toEqual(['sendDocument', 'sendDocument'])
+      for (const request of requests) {
+        expect(request.contentType).toContain('multipart/form-data')
+        expect(request.body.includes(Buffer.from('name="document"'))).toBe(true)
+        expect(request.body.includes(Buffer.from('filename="a.txt"'))).toBe(true)
+        expect(request.body.includes(Buffer.from(bytes))).toBe(true)
+        // What the mismatched-FormData failure looked like: a 17-byte text body.
+        expect(request.body.includes(Buffer.from('[object FormData]'))).toBe(false)
+      }
+    })
+  })
+
+  it('reports the text it already delivered when an attachment then fails', async () => {
+    const calls: string[] = []
+    const impl = (async (input: Parameters<typeof fetch>[0]) => {
+      const method = String(input).split('/').at(-1) ?? ''
+      calls.push(method)
+      if (method === 'sendMessage') {
+        return { ok: true, status: 200, json: () => Promise.resolve({ ok: true, result: { message_id: 371 } }) } as unknown as Response
+      }
+      return {
+        ok: true,
+        status: 400,
+        json: () => Promise.resolve({
+          ok: false,
+          error_code: 400,
+          description: 'Bad Request: there is no document in the request',
+        }),
+      } as unknown as Response
+    }) as unknown as typeof fetch
+    const channel = createTelegramChannel({ token: 'T', fetch: impl, retryDelayMs: 1 })
+
+    const failure: unknown = await channel.send({
+      channel: 'telegram',
+      route: 'chat:1',
+      text: 'the reply',
+      attachments: [{ kind: 'file', name: 'a.txt', data: new Uint8Array([1, 2, 3]) }],
+    }).catch((error: unknown) => error)
+
+    // The text is already in the chat, so a caller must be told not to resend it.
+    expect(String(failure)).toContain('delivered the text as message 371')
+    expect(String(failure)).toContain('attachment 1 of 1')
+    // A rejection the provider means is not retried, so the text went out once.
+    expect(calls).toEqual(['sendMessage', 'sendDocument'])
   })
 })
+
+/** One request as the server saw it, bytes and all. */
+interface RecordedRequest {
+  readonly method: string
+  readonly contentType: string
+  readonly body: Buffer
+}
+
+/**
+ * A real Bot API stand-in on a real socket. The fake fetch above records the
+ * body object it is handed, which cannot expose a body the transport failed to
+ * encode: a `FormData` from a different undici build still looks like one. Only
+ * a real fetch against a real server shows what went on the wire.
+ */
+async function withRealBotApi(
+  run: (apiBaseUrl: string, requests: RecordedRequest[]) => Promise<void>,
+): Promise<void> {
+  const requests: RecordedRequest[] = []
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      requests.push({
+        method: request.url?.split('/').at(-1) ?? '',
+        contentType: String(request.headers['content-type'] ?? ''),
+        body: Buffer.concat(chunks),
+      })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: true, result: { message_id: 9 } }))
+    })
+  })
+  await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
+  const { port } = server.address() as AddressInfo
+  try {
+    await run(`http://127.0.0.1:${String(port)}`, requests)
+  } finally {
+    await new Promise<void>(resolve => { server.close(() => { resolve() }) })
+  }
+}
+
+/** Set these proxy variables for one case, then put the environment back. */
+async function withProxyEnv(
+  vars: Readonly<Record<string, string | undefined>>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const saved = new Map<string, string | undefined>()
+  for (const [name, value] of Object.entries(vars)) {
+    saved.set(name, process.env[name])
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  try {
+    await run()
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}

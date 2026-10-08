@@ -98,7 +98,11 @@ async function handle(message: InboundMessage) {
 | Weixin | WeChat iLink long poll (`ilink/bot/getupdates`) | `@contexera/dsh-channel-gateway/weixin` | Text and media. A reply quotes the inbound `context_token`, which WeChat expires after roughly two minutes; the adapter refreshes a stale one before sending. `format: 'markdown'` renders as sanitized WeChat Markdown. The media download/upload path follows the reference iLink protocol and is **not yet verified against a live account**. Starts from a token it is given — the QR login flow is not implemented yet. |
 
 Both adapters honour `HTTPS_PROXY`/`NO_PROXY` (Node's own fetch does not, unless
-`NODE_USE_ENV_PROXY` is set).
+`NODE_USE_ENV_PROXY` is set). They always send through this package's own
+`undici` fetch, proxied or not, and build multipart uploads with the `FormData`
+exported alongside it — a multipart body from a different undici build than the
+fetch is not recognized as multipart and is sent as the string
+`[object FormData]`, which the provider rejects as an empty upload.
 
 ## Compatibility
 

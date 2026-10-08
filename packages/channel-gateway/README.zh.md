@@ -84,6 +84,9 @@ export function apply(ctx: Context) {
 | 微信 | iLink 长轮询（`ilink/bot/getupdates`） | `@contexera/dsh-channel-gateway/weixin` | 文本与媒体。回复要带上入站消息的 `context_token`，微信侧约两分钟后过期，发送前会刷新已过期的 token。`format: 'markdown'` 渲染为清洗后的微信 Markdown。媒体的上传/下载按 iLink 参考协议实现，**尚未在真实账号上验证**。需要一个已获得的 token——扫码登录流程尚未实现。 |
 
 两个适配器都尊重 `HTTPS_PROXY`/`NO_PROXY`（Node 自带 fetch 默认不读这两个变量）。
+出站一律走本包自带的那份 `undici` fetch（有无代理都一样），multipart 上传用与它
+配套导出的那个 `FormData`：若 multipart 体来自另一个 undici 构建，fetch 不认它，
+会当成字符串 `[object FormData]` 发出去，provider 只会当成空上传拒绝。
 
 ## 兼容性
 

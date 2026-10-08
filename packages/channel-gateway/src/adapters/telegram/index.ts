@@ -27,7 +27,10 @@ import type {
 } from '../../contracts.ts'
 import { ChannelGatewayError, errorText } from '../../errors.ts'
 import type {} from '../../gateway.ts'
-import { delay, proxyAwareFetch, withRetry } from '../http.ts'
+// `FormData` here is deliberately the gateway's own, shadowing the global one:
+// it has to be the same undici build as the fetch, or the multipart body is not
+// recognized and the upload arrives empty. See `adapters/http.ts`.
+import { delay, FormData, proxyAwareFetch, withRetry } from '../http.ts'
 import { silentLog, type AdapterLog } from '../log.ts'
 import { splitTelegramHtml } from './markdown.ts'
 import { splitText } from '../text.ts'
@@ -459,6 +462,7 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
     async send(message: OutboundMessage): Promise<ChannelSendResult> {
       const chatId = chatIdOf(message.route)
       let last: number | undefined
+      let textId: number | undefined
       const markdown = message.format === 'markdown'
       const chunks = markdown
         ? splitTelegramHtml(message.text, TELEGRAM_MAX_TEXT_LENGTH)
@@ -469,9 +473,26 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
         if (index === 0 && message.replyTo !== undefined) body.reply_to_message_id = Number(message.replyTo)
         const sent = await withRetry(() => call<TelegramMessage>('sendMessage', body), sendPolicy)
         last = sent.message_id
+        textId = sent.message_id
       }
-      for (const attachment of message.attachments ?? []) {
-        last = await sendAttachment(chatId, attachment)
+      const attachments = message.attachments ?? []
+      for (const [index, attachment] of attachments.entries()) {
+        try {
+          last = await sendAttachment(chatId, attachment)
+        } catch (error: unknown) {
+          // Text cannot be taken back once sent, so a bare failure would read as
+          // "nothing arrived" and invite a resend that duplicates what the chat
+          // already shows. This is a transport failure rather than the caller's
+          // mistake, so it stays a plain Error with the original as its cause;
+          // the message is what tells the caller only the attachment is left to
+          // send. With no text delivered, the original error says it all.
+          if (textId === undefined) throw error
+          throw new Error(
+            `telegram delivered the text as message ${String(textId)}, then attachment `
+            + `${String(index + 1)} of ${String(attachments.length)} failed: ${errorText(error)}`,
+            { cause: error },
+          )
+        }
       }
       if (last === undefined) {
         throw new ChannelGatewayError('telegram send carried neither text nor attachments')

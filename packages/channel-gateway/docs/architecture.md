@@ -127,6 +127,21 @@ owns that work — the acceptance step a consumer is expected to implement.
   attachments, an adapter asked to send something it cannot.
 - A transport failure is anything else the adapter raises; the gateway logs it
   where it owns the call (start, stop) and otherwise lets it reach the caller.
+  A send that delivered part of a message before failing is one of these: the
+  text is already in the chat and cannot be taken back, so the error names the
+  part that arrived and the caller resends only the rest. Resending the whole
+  message would duplicate what the recipient can already see.
+
+## Transport
+
+Adapters reach their provider through `proxyAwareFetch()`, which honours
+`HTTPS_PROXY`/`HTTP_PROXY` and `NO_PROXY`. It is deliberately always the
+package's own `undici` fetch, even when no proxy is set, and it exports the
+`FormData` that pairs with it: a multipart body built from a different undici
+build than the fetch is not recognized as multipart, and is sent as the literal
+string `[object FormData]` instead. The provider then rejects the upload as
+empty, which is why adapters must construct multipart bodies from the exported
+`FormData` rather than the global one.
 
 ## Adapter mappings
 
@@ -154,7 +169,9 @@ between the two halves of a surrogate pair, and the chunks join back to the
 original text; a transient send failure is retried with backoff, honouring the
 API's `retry_after`. An attachment sends from local `data` as a multipart
 upload, else by its provider `ref` or `url`; `resolveAttachment` reads an inbound
-attachment's bytes through `getFile` and a file download.
+attachment's bytes through `getFile` and a file download. A send delivers text
+before attachments, so an attachment that fails after the text went out raises
+the partial-delivery error above rather than a bare transport failure.
 
 ### Weixin
 
