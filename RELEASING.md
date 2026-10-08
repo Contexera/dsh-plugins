@@ -9,7 +9,7 @@ public.
 
 | Face | Rule |
 | --- | --- |
-| Tag | `<scope>/dsh-<name>@X.Y.Z`, in that package's own published scope — `@contexera` once it has moved, `@wowyuarm` until its own rename — the shape changesets gives a non-root package. A bare `vX.Y.Z` cannot name one of several packages. |
+| Tag | `<scope>/dsh-<name>@X.Y.Z`, in that package's own published scope — `@contexera`, now that every package has moved — the shape changesets gives a non-root package. A bare `vX.Y.Z` cannot name one of several packages. |
 | Tag target | The release commit: the one whose `package.json` carries that version and whose `CHANGELOG.md` holds that section. |
 | GitHub Release | Title = the tag, body = that version's `CHANGELOG.md` section verbatim, `--latest=false`. |
 | npm | The tarball `changeset publish` uploads. |
@@ -57,6 +57,22 @@ Two rules are not negotiable:
    git push --dry-run origin 'refs/tags/<tag>:refs/tags/<tag>'
    git push origin 'refs/tags/<tag>:refs/tags/<tag>'
    ```
+
+   `changeset publish` has no per-package switch: it publishes *every* package
+   whose current `name@version` is not on the registry. That set is usually
+   exactly this round's packages; when it is not — say a package that was renamed
+   and must wait for its own round — publish the others explicitly instead, one at
+   a time, and read each version back before tagging it:
+
+   ```sh
+   cd packages/<name> && pnpm publish --access public --tag latest
+   ```
+
+   A publish is only real once the registry serves it. A first publish under a new
+   name can land as a *staged* version — npm defers the 2FA proof-of-presence —
+   and `pnpm publish` prints `✅ Published` either way. Read the version endpoint
+   back: until it answers and `latest` points at that version, nothing is
+   installable.
 
    Push the tag *before* creating the Release: `gh release create` on a tag that
    does not exist yet creates it at the branch head, which is not the release
