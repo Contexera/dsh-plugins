@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { JevRequest, JevResult } from '@wowyuarm/dsh-jev'
+import type { JevRequest, JevResult } from '@contexera/dsh-jev'
 import {
   ContextPressurePolicy,
   PRESSURE_NOTICE_SUMMARY,

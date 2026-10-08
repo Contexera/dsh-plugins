@@ -22,7 +22,7 @@ optional search tools mounted — it can search back through its earlier Session
 pull out what it said or did. Any agent that runs long enough to fill a Session can
 use it — a
 [Loom](https://github.com/wowyuarm/Loom) individual, an
-[Agent Team](https://github.com/wowyuarm/dsh-agent-team) member, a coding agent on
+[Agent Team](https://github.com/Contexera/dsh-agent-team) member, a coding agent on
 a long task.
 
 ## What the agent gets
@@ -51,7 +51,7 @@ every plugin that adopts this gives its agents the same set:
   The notice asks the agent to shorten its own context with a summary it writes,
   and the fallback — at the limit, or when the provider refuses an oversized
   request — is the engine writing one from its template, since no agent is there
-  to be asked. With the optional `@wowyuarm/dsh-jev` peer installed and a host
+  to be asked. With the optional `@contexera/dsh-jev` peer installed and a host
   that supplies the view, a Session that is still large after a long absence
   starts a fresh generation before the new request runs: the request is quoted
   into the instruction that asks for the handoff, and the request itself is

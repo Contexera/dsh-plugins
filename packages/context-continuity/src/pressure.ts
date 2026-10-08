@@ -42,7 +42,7 @@
 
 import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { JevRequest, JevResult } from '@wowyuarm/dsh-jev'
+import type { JevRequest, JevResult } from '@contexera/dsh-jev'
 import { producerNoticeSource, v3RenamedSourceKind } from './message-codec.ts'
 import { CONTEXT_ROLLOVER_TOOL_NAME } from './projection.ts'
 import { CONTEXT_COMPACT_TOOL_NAME } from './tools.ts'

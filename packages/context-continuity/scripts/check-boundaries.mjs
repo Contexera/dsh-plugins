@@ -9,7 +9,7 @@
  * source path, or any undeclared dependency leaking into `src/` would quietly
  * make the engine host-specific again — the one thing the extraction prevents.
  *
- * `@wowyuarm/dsh-jev` is the single deliberate exception: the long-gap
+ * `@contexera/dsh-jev` is the single deliberate exception: the long-gap
  * relatedness gate has to state the question it asks and read the answer it
  * gets, and those are that package's own shapes. It is an optional peer, so a
  * deployment that installs no judge still loads this package.
@@ -41,9 +41,9 @@ const ALLOWED_PACKAGES = new Set([
   '@deepseek-ai/dsh-session-projection',
   '@deepseek-ai/dsh-session-query',
   '@deepseek-ai/dsh-tools',
-  // The one cross-`@wowyuarm` import: the relatedness judge's request and
+  // The one cross-`@contexera` import: the relatedness judge's request and
   // result shapes. Optional peer — absent means the gate is off, not broken.
-  '@wowyuarm/dsh-jev',
+  '@contexera/dsh-jev',
   'zod',
 ])
 

@@ -18,7 +18,7 @@
 一个位置方便以后回来；挂上可选的检索工具之后，它还能回头搜自己早先的 Session，把当时说过、
 做过的事翻出来。任何跑得够久、会把
 Session 写满的 agent 都能用——
-[Loom](https://github.com/wowyuarm/Loom) 的 individual、[Agent Team](https://github.com/wowyuarm/dsh-agent-team)
+[Loom](https://github.com/wowyuarm/Loom) 的 individual、[Agent Team](https://github.com/Contexera/dsh-agent-team)
 的 member、跑长任务的 coding agent。
 
 ## agent 能用到什么
@@ -36,7 +36,7 @@ Session 写满的 agent 都能用——
   下来的东西。
 - **压力兜底** —— Session 快满时提前提醒，到上限时给一个安全退路，agent 不会被迫在糟糕的
   时机切换。提醒会要 agent 用**自己写的摘要**就地压短；到上限、或 provider 拒收过长请求时
-  没有 agent 在场可问，则由引擎按模板写一份。装了可选的 `@wowyuarm/dsh-jev` peer、且宿主
+  没有 agent 在场可问，则由引擎按模板写一份。装了可选的 `@contexera/dsh-jev` peer、且宿主
   供得上相应视图时：隔了很久才回来、context 又还很大，就先换代再跑新请求——那条请求会被
   引到换代指令里，无论换不换得成都会原样交回手上，人发的东西不会丢。
 

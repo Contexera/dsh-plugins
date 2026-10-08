@@ -1,7 +1,7 @@
 # dsh-plugins
 
 Monorepo for the published [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-plugins under the `@wowyuarm` scope. Each package is published to npm
+plugins under the `@contexera` scope. Each package is published to npm
 independently; the repo only unifies tooling, dependency management, and release.
 
 ## Packages

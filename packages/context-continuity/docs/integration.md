@@ -615,7 +615,7 @@ if (decision.kind === 'hold') {
 
 - **The judge is a deployment of its own.** `judgeFor` takes anything with a
   `decide(request)`, which in practice is the `ctx.jev` service of
-  `@wowyuarm/dsh-jev`; a deployment adds that bundle as its own plugin row, and the
+  `@contexera/dsh-jev`; a deployment adds that bundle as its own plugin row, and the
   row names the environment variable holding the key (`apiKeyEnv`, default
   `TYPESAFE_API_KEY`). This engine declares that package only as an optional peer,
   for the question and answer shapes it writes and reads, and never sees a

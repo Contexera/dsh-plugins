@@ -19,10 +19,10 @@ Authority order:
 - **The engine stays host-agnostic.** `src/` may import only its own relative
   modules, `node:` builtins, and the declared `@deepseek-ai/dsh-*` peers;
   `npm run check:boundaries` enforces exactly that list. Never import a host
-  package (`@wowyuarm/dsh-agent-team`, Loom) or a sibling Harness source path —
+  package (`@contexera/dsh-agent-team`, Loom) or a sibling Harness source path —
   a host-specific leak defeats the reason this package exists. There are exactly
   two deliberate exceptions, each carrying its reason in `ALLOWED_PACKAGES`:
-  - `@wowyuarm/dsh-jev`, an optional peer imported for the long-gap gate's
+  - `@contexera/dsh-jev`, an optional peer imported for the long-gap gate's
     question and answer shapes.
   - `@deepseek-ai/dsh-compaction-basic`, imported by `compaction-engine.ts` only.
     A checkpoint template states what a summary must preserve, but the summary is

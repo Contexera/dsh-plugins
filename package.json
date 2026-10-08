@@ -2,7 +2,7 @@
   "name": "@contexera/dsh-plugins",
   "version": "0.0.0",
   "private": true,
-  "description": "Monorepo for published DeepSeek Harness plugins under the @wowyuarm scope.",
+  "description": "Monorepo for published DeepSeek Harness plugins under the @contexera scope.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.21.0",

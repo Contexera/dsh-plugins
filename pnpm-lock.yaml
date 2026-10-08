@@ -40,6 +40,9 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@contexera/dsh-jev':
+        specifier: 0.1.2
+        version: 0.1.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)
       '@deepseek-ai/cordis':
         specifier: 4.0.4
         version: 4.0.4
@@ -73,9 +76,6 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.0
-      '@wowyuarm/dsh-jev':
-        specifier: 0.1.1
-        version: 0.1.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -171,6 +171,13 @@ packages:
   '@clack/prompts@1.8.1':
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
+
+  '@contexera/dsh-jev@0.1.2':
+    resolution: {integrity: sha512-4ZTfonJYq5anDkTKRjCyhoyttRukEsw2T1T/mflikaunMLyadKR6/P9JJ9mcV8/jS6LriFXNcdRda7Nfj4ac3Q==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.1
+      '@deepseek-ai/schemastery': ^3.18.1
 
   '@deepseek-ai/cordis@4.0.4':
     resolution: {integrity: sha512-obgyxqWAmFn3Re8kvsuUnyW+ihrz6eJCnJO4fh1cQzDtmPYz/zzVeUkH9R94I0OwSVOocK67Kgakm04j/oQXzg==}
@@ -640,13 +647,6 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@wowyuarm/dsh-jev@0.1.1':
-    resolution: {integrity: sha512-6oAOWcCtAELI88dYECKSLHblqKvBOkozRz8TM8VWxZS2eO/0BDzkLmR5827AJT/iTWgkFokvc/MlfnZF3Pm1xw==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      '@deepseek-ai/schemastery': ^3.18.1
-
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
@@ -1090,6 +1090,11 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
+  '@contexera/dsh-jev@0.1.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)':
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.4
+      '@deepseek-ai/schemastery': 3.18.4
+
   '@deepseek-ai/cordis@4.0.4':
     dependencies:
       '@deepseek-ai/cosmokit': 1.8.5
@@ -1524,11 +1529,6 @@ snapshots:
       '@vitest/pretty-format': 4.1.11
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
-
-  '@wowyuarm/dsh-jev@0.1.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.4
-      '@deepseek-ai/schemastery': 3.18.4
 
   assertion-error@2.0.1: {}
 
