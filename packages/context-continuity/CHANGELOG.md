@@ -1,5 +1,59 @@
 # @contexera/dsh-context-continuity
 
+## 0.4.0
+
+### Minor Changes
+
+- [中文](#cn-v0-4-0) | [English](#en-v0-4-0)
+
+  <h3 id="cn-v0-4-0">中文</h3>
+
+  **改了什么**
+
+  - **宿主需要改一处：**`measureSource` 现在返回 `SurfaceMeasurement`（`{ totalTokens, nodes }`，压缩接缝与 Harness token meter 已有的形状），不再是裸的 token 总数；`retainedEstimate` 移除。返回 meter 自己的测量即可。
+  - 返回锚点改为**逐节点**计价，沿用源会话自己的测量。测不出节点的源 ⇒ 锚点按不可测处理（fail closed），不再按免费处理。
+  - 长间隔判定改从最新的 `turn/end` 起算。原先从日志里最新的事件起算，而循环会先写入本轮 `turn/start`，所以这个门一直不可能触发。
+  - 上下文压力提示改为**每个上下文上锁一次**（原先每个 Session 一次）：`compaction/end` 起算新上下文，之后写下的提示才上锁；缓存它的那个增量折叠已删除。
+  - 汇总请求现在带上对话选定的 reasoning effort。适配器按 `options.reasoningEffort ?? profile.reasoning` 解析，不写 effort 不等于不用 effort，而是静默套用 profile 默认值，于是硬限制压缩失败并卡住整轮——表现就是「切换模型没生效」。
+  - 导出共享的锚点规则：`anchorCandidates`、`anchorRejection`、`retainedPrice` 与 `AnchorRule`（可带宿主的 `boundaryRestorableFor`），timeline 与 `context_rollover` 由此问同一条规则；`AnchorCandidate.topicsThrough` 取代 `attributions`，看的是这次返回**实际会保留的前缀**。
+
+  **兼容性**
+
+  - DSH 声明线不变：`>=0.2.0-rc.1 <0.2.1`。
+  - 根入口与 `./compaction-engine` 子路径不变；根入口新增上面那几个导出。
+  - 唯一的破坏点是 `measureSource` 的返回形状，另加 `retainedEstimate` 移除。
+  - `@contexera/dsh-jev` 仍是可选 peer `^0.1.2`。
+
+  **验证**
+
+  - 本地：`pnpm -r typecheck`、`pnpm -r test`（10 个文件 / 336 条测试）、`pnpm -r build` 全过，`check:peers` 通过。
+
+  ```sh
+  npm i @contexera/dsh-context-continuity@0.4.0
+  ```
+
+  <h3 id="en-v0-4-0">English</h3>
+
+  **What changed**
+
+  - **Hosts change one thing:** `measureSource` now returns `SurfaceMeasurement` (`{ totalTokens, nodes }`, the shape the compaction seam and the Harness token meter already use) instead of a bare token total, and `retainedEstimate` is removed. Return the meter's own measurement.
+  - Return anchors are priced **node by node** out of the source's own measurement. A source that prices no node prices no anchor — unmeasurable, no longer free.
+  - The long-gap gate now measures from the newest `turn/end`. It measured from the newest event, and the loop appends the arriving turn's `turn/start` first, so the gate could never fire.
+  - The context-pressure notice latches **once per context** rather than once per Session: a `compaction/end` starts a fresh context for the latch. The incremental fold that cached it is gone.
+  - Summarization requests carry the reasoning effort the conversation chose. An adapter resolves `options.reasoningEffort ?? profile.reasoning`, so naming none did not run effort-free — it silently took the profile default, the hard-limit reduction failed closed and blocked the turn, which reads as "switching the model did not take effect".
+  - The shared anchor rule is exported: `anchorCandidates`, `anchorRejection`, `retainedPrice` and `AnchorRule` (carrying the host's `boundaryRestorableFor`), so the timeline and `context_rollover` ask one rule; `AnchorCandidate.topicsThrough` replaces `attributions` and reads what a return would actually keep.
+
+  **Compatibility**
+
+  - The DSH line is unchanged: `>=0.2.0-rc.1 <0.2.1`.
+  - The root entry and the `./compaction-engine` subpath are unchanged; the root entry gains the exports above.
+  - The one breaking change is `measureSource`'s return shape, plus the removal of `retainedEstimate`.
+  - `@contexera/dsh-jev` stays an optional peer at `^0.1.2`.
+
+  **Verification**
+
+  - Local: `pnpm -r typecheck`, `pnpm -r test` (10 files / 336 tests) and `pnpm -r build` pass, and `check:peers` holds.
+
 ## 0.3.1
 
 ### Patch Changes
