@@ -34,7 +34,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, LlmError, contentHasImage } from '@deepseek-ai/dsh-llm'
 import type {
-  ContentBlock, FinishReason, GenerateOptions, Message, RequestMessage, TokenUsage, ToolSchema,
+  ContentBlock, FinishReason, GenerateOptions, Message, RequestMessage, ReasoningEffortId, TokenUsage, ToolSchema,
 } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
@@ -71,6 +71,20 @@ export type ContinuitySummaryResult = {
 interface SummarizationTarget {
   readonly provider: string
   readonly model: string
+  /**
+   * The effort the conversation itself was running, when that route named one.
+   *
+   * The auxiliary call must carry it: an adapter resolves its effort as
+   * `options.reasoningEffort ?? profile.reasoning`, so a request that names none
+   * falls back to the deployment's *profile default* — a level configured for
+   * whatever model that profile usually serves. When the conversation chose a
+   * different level, that default is not merely different but often one the
+   * conversation's own model does not support, and the request path refuses
+   * instead of clamping. The reduction the hard limit depends on then fails
+   * closed and the turn is blocked, on a model the conversation had been using
+   * successfully for every one of its own requests.
+   */
+  readonly reasoningEffort?: ReasoningEffortId | undefined
 }
 
 /**
@@ -115,6 +129,13 @@ export class ContinuityCompactionEngine extends BasicCompactionEngine {
    * summarization fields first, then the conversation's own last routed target,
    * then the agent's options — so a subject whose route differs from the
    * deployment default still summarizes on the model it is actually running.
+   *
+   * An effort the conversation chose travels with it. A summarization call that
+   * names none is not effort-free: the adapter substitutes its own profile
+   * default, which is a level chosen for the deployment rather than for this
+   * model — and the request path rejects an unsupported one rather than
+   * clamping it. So the one request the hard limit depends on can be refused on
+   * a model every ordinary request in the same turn was using happily.
    */
   protected override async summarize(
     input: ContinuitySummarizationInput,
@@ -144,6 +165,7 @@ export class ContinuityCompactionEngine extends BasicCompactionEngine {
       maxTokens: this.config.maxTokens,
       sessionId: agent.session.id,
       purpose: 'compaction',
+      ...(target.reasoningEffort === undefined ? {} : { reasoningEffort: target.reasoningEffort }),
       ...(signal === undefined ? {} : { signal }),
     }
     for await (const chunk of this.ctx.llm.stream(options)) assembler.push(chunk)
@@ -181,11 +203,25 @@ function summarizationTarget(config: ResolvedConfig, agent: Agent): Summarizatio
   }
   const routed = agent.session.requestHeader()?.config
   if (routed !== undefined && routed.provider.length > 0 && routed.model.length > 0) {
-    return { provider: routed.provider, model: routed.model }
+    // An effort the adapter itself defaulted is not a conversation choice, and
+    // restoring it here would repeat exactly the failure this field prevents:
+    // the adapter would reject its own default against this same model.
+    const chosen = agent.session.requestHeader()?.adapterDefaults?.reasoningEffort === true
+      ? undefined
+      : routed.reasoningEffort
+    return {
+      provider: routed.provider,
+      model: routed.model,
+      ...(chosen === undefined ? {} : { reasoningEffort: chosen }),
+    }
   }
-  const { provider, model } = agent.options
+  const { provider, model, reasoningEffort } = agent.options
   if (provider !== undefined && provider.length > 0 && model !== undefined && model.length > 0) {
-    return { provider, model }
+    return {
+      provider,
+      model,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    }
   }
   throw new Error(
     'no provider/model available for summarization: set both BasicCompactionConfig summarization fields, route one request, or set both AgentOptions fields',

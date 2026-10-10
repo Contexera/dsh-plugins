@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
@@ -21,6 +21,7 @@ import {
 } from '../src/compaction-engine.ts'
 import { DEFAULT_COMPACTION_TEMPLATE } from '../src/compaction-template.ts'
 import { clearPendingSummary, offerPendingSummary } from '../src/pending-summary.ts'
+import { canonicalHeader } from '@deepseek-ai/dsh-session'
 import { conversation } from './session-fixture.ts'
 
 /** The body the faked summarization call returns. */
@@ -65,6 +66,42 @@ function backend(Engine: typeof ExposedEngine = ExposedEngine): {
 /** One routed agent over a small conversation. */
 function routedAgent(): Agent {
   const session = conversation({ turns: 2 })
+  return { session, options: { provider: 'p', model: 'm' } } as unknown as Agent
+}
+
+/**
+ * One routed agent whose conversation chose a reasoning effort.
+ *
+ * The header is appended as a real event rather than stubbed, because the
+ * target resolution reads it back through `requestHeader()` — the same durable
+ * fold production uses. `adapterDefaults` is left off: an effort the adapter
+ * materialized itself is not a conversation choice.
+ */
+function routedAgentWithEffort(effort: string): Agent {
+  const session = conversation({ turns: 2 })
+  session.append('request/header', {
+    header: canonicalHeader({
+      config: { provider: 'p', model: 'm', reasoningEffort: ReasoningEffortId(effort) },
+    }),
+    reason: 'initial',
+  })
+  return { session, options: { provider: 'p', model: 'm' } } as unknown as Agent
+}
+
+/**
+ * One routed agent whose effort the adapter defaulted rather than the
+ * conversation choosing: the header carries the effort, but marks it as an
+ * adapter default.
+ */
+function routedAgentWithDefaultedEffort(effort: string): Agent {
+  const session = conversation({ turns: 2 })
+  session.append('request/header', {
+    header: canonicalHeader({
+      config: { provider: 'p', model: 'm', reasoningEffort: ReasoningEffortId(effort) },
+      adapterDefaults: { reasoningEffort: true },
+    }),
+    reason: 'initial',
+  })
   return { session, options: { provider: 'p', model: 'm' } } as unknown as Agent
 }
 
@@ -118,6 +155,37 @@ describe('the continuity compaction engine', () => {
     // plugin's config against a schema this package does not own.
     const { options } = await summarizeOnce(HouseStyleEngine)
     expect(finalInstruction(options)).toBe('MY OWN TEMPLATE')
+  })
+
+  it('sends the effort the conversation chose, so the adapter does not substitute its own default', async () => {
+    // The production failure: an adapter resolves its effort as
+    // `options.reasoningEffort ?? profile.reasoning`, so a call naming none
+    // silently takes the deployment's profile default. That level is configured
+    // for whatever model the profile usually serves, and against a model that
+    // does not support it the request path refuses rather than clamps — so the
+    // hard-limit reduction fails closed and blocks the turn, on the very model
+    // every ordinary request in that turn was using successfully.
+    const { engine, requests } = backend()
+    const result = await engine.summarizeNow({ messages: [] }, routedAgentWithEffort('high'))
+    expect(requests[0]?.reasoningEffort).toBe('high')
+    expect(result.provider).toBe('p')
+  })
+
+  it('leaves the effort off a call whose effort the adapter itself defaulted', async () => {
+    // Restoring an adapter-materialized default is the same failure again from
+    // the other side: the adapter would reject its own default against this
+    // model. Only a conversation choice travels.
+    const { engine, requests } = backend()
+    await engine.summarizeNow({ messages: [] }, routedAgentWithDefaultedEffort('high'))
+    expect(requests[0]?.reasoningEffort).toBeUndefined()
+  })
+
+  it('names no effort when the conversation chose none', async () => {
+    // The pre-existing behaviour must survive: a conversation that named no
+    // effort still gets a call that names none, and the adapter's own default
+    // stays the adapter's business.
+    const { options } = await summarizeOnce()
+    expect(options.reasoningEffort).toBeUndefined()
   })
 
   it('routes through the agent when no summarization target is configured', async () => {
