@@ -299,6 +299,24 @@ describe('pricing honesty', () => {
     expect(timeline.items[1]?.discardedTokens).toBe(1000)
   })
 
+  it('treats a measurement that prices no node as unmeasurable, not as a crash', async () => {
+    // A host meter that reports only a total - or something that is not a
+    // measurement at all - is the same unknown: the read states that the budget
+    // cannot be proven rather than failing on a property nobody promised.
+    const timeline = await readContextTimeline(requestOf({
+      current: sourceOf(CURRENT, log(
+        turnStart(1),
+        ...checkpoint(1, 'call-cp', 'anchor'),
+        turnStart(2),
+        turnEnd(2),
+      )),
+      measureSource: () => ({ totalTokens: 9_000 }) as unknown as SurfaceMeasurement,
+    }))
+    const anchor = itemOf(timeline, 'checkpoint')!
+    expect(anchor.restorable).toBe(false)
+    expect(anchor.reason).toBe('the source Session\'s context cost cannot be measured, so the return budget cannot be proven')
+  })
+
   it('rejects a target whose retained context is at or above the handoff budget', async () => {
     const timeline = await readContextTimeline(requestOf({
       current: sourceOf(CURRENT, log(
@@ -431,6 +449,18 @@ describe('boundary attribution', () => {
     expect(boundary.affectedTopics).toEqual(['thread:aaaa-1111'])
     expect(boundary.restorable).toBe(false)
     expect(boundary.reason).toBe('a handoff closes a context; unwinding into it is not a proven-safe target')
+  })
+
+  it('words the shared reason in the host\'s own nouns, because the subject reads it', async () => {
+    const timeline = await readContextTimeline(requestOf({
+      current: sourceOf(CURRENT, log(
+        turnStart(1),
+        notice('Thread: thread:aaaa-1111 and Thread: thread:bbbb-2222'),
+        turnEnd(1),
+      )),
+      anchorText: { topicNoun: 'Thread', topicNounPlural: 'Threads' },
+    }))
+    expect(itemOf(timeline, 'boundary')?.reason).toBe('multiple Threads entered the context through this boundary; write a fresh handoff instead')
   })
 })
 

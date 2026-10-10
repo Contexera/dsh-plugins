@@ -35,7 +35,7 @@
  */
 
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import { anchorCandidates, anchorRejection, retainedPrice, type AnchorCandidate, type AnchorSourceKind } from './anchor.ts'
+import { anchorCandidates, anchorRejection, retainedPrice, type AnchorCandidate, type AnchorReasonText, type AnchorSourceKind } from './anchor.ts'
 import { foldContextProjection, type ContextProjectionConfig } from './projection.ts'
 import type { ContextProjectionState } from './projection-state.ts'
 import type { SurfaceMeasurement } from './compaction.ts'
@@ -181,6 +181,23 @@ export interface ContextTimelineRequest {
   readonly limit?: number
   /** How many archived ancestors to follow; defaults to {@link DEFAULT_TIMELINE_ANCESTORS}. */
   readonly maxAncestors?: number
+  /**
+   * The domain nouns the anchor reasons are worded in. The subject reads every
+   * reason this read returns, so a host that calls its topics something else
+   * words them itself; omitted uses `topic`/`topics`.
+   */
+  readonly anchorText?: AnchorReasonText
+}
+
+/**
+ * One source's usable measurement, or `undefined` when there is none. A host
+ * meter that prices no node at all prices no prefix, and a meter that returns
+ * something that is not a measurement at all is the same unknown: the read
+ * reports it rather than failing on a property nobody promised.
+ */
+function usableMeasurement(metered: SurfaceMeasurement | undefined): SurfaceMeasurement | undefined {
+  if (metered === undefined || !Array.isArray(metered.nodes) || metered.nodes.length === 0) return undefined
+  return metered
 }
 
 /** Price and annotate one candidate of one source; nothing here mutates the fold. */
@@ -206,7 +223,10 @@ function itemFor(
     : isCurrent
       ? Math.max(0, request.currentUsageTokens - retainedTokens)
       : request.currentUsageTokens
-  const reason = anchorRejection(candidate, retainedTokens, measurement?.totalTokens, request.handoffAt, request.config.host)
+  const reason = anchorRejection(candidate, retainedTokens, measurement?.totalTokens, request.handoffAt, {
+    host: request.config.host,
+    text: request.anchorText,
+  })
   return {
     ref: candidate.ref,
     label: candidate.label,
@@ -247,9 +267,7 @@ export async function readContextTimeline(request: ContextTimelineRequest): Prom
       inheritedEventCount: Number(source.inheritedEventCount),
     })
     const measured = request.measureSource === undefined ? undefined : await request.measureSource(source)
-    // A measurement that prices no node at all cannot price a prefix: it is an
-    // unknown, not a free context.
-    const measurement = measured !== undefined && measured.nodes.length > 0 ? measured : undefined
+    const measurement = usableMeasurement(measured)
     for (const candidate of anchorCandidates(state, request.config.host, isCurrent).slice(0, limit)) {
       if (seen.has(candidate.ref)) continue
       seen.add(candidate.ref)

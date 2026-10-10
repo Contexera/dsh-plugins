@@ -47,6 +47,26 @@ export interface AnchorCandidate {
 }
 
 /**
+ * The domain nouns one anchor reason is worded in. The subject reads these
+ * strings, and what a host calls its topics is the host's vocabulary — a rule
+ * the engine owns is still worded in the words its reader already uses.
+ */
+export interface AnchorReasonText {
+  /** How one attributable subject of a boundary is named, e.g. `topic`, `Thread`. */
+  readonly topicNoun?: string
+  /** The plural of {@link AnchorReasonText.topicNoun}, e.g. `topics`, `Threads`. */
+  readonly topicNounPlural?: string
+}
+
+/** What one application of the shared anchor rule needs beyond the anchor itself. */
+export interface AnchorRule {
+  /** The host whose own rule for its boundary kinds is asked, when it has one. */
+  readonly host?: ContextProjectionHost | undefined
+  /** The domain nouns the topic reasons are worded in; defaults to `topic`/`topics`. */
+  readonly text?: AnchorReasonText | undefined
+}
+
+/**
  * The exact cost of entering one anchor: what its seed prefix would keep,
  * priced node by node out of the source's own measurement.
  *
@@ -153,7 +173,7 @@ export function anchorRejection(
   retainedTokens: number,
   sourceUsage: number | undefined,
   handoffAt: number,
-  host?: ContextProjectionHost,
+  rule?: AnchorRule,
 ): string | undefined {
   if (candidate.source === 'head') return 'the head is the current working set; returning to it discards nothing'
   if (sourceUsage === undefined) {
@@ -162,12 +182,14 @@ export function anchorRejection(
     return 'the source Session\'s context cost cannot be measured, so the return budget cannot be proven'
   }
   if (candidate.source === 'boundary') {
-    const domain = host?.boundaryRestorableFor?.(candidate)
+    const domain = rule?.host?.boundaryRestorableFor?.(candidate)
     if (domain !== undefined) return domain
     if (candidate.topicsThrough.length !== 1) {
+      const noun = rule?.text?.topicNoun ?? 'topic'
+      const nouns = rule?.text?.topicNounPlural ?? `${noun}s`
       return candidate.topicsThrough.length === 0
-        ? 'no single topic is attributable to this boundary'
-        : 'multiple topics entered the context through this boundary; write a fresh handoff instead'
+        ? `no single ${noun} is attributable to this boundary`
+        : `multiple ${nouns} entered the context through this boundary; write a fresh handoff instead`
     }
   }
   if (retainedTokens >= handoffAt) {

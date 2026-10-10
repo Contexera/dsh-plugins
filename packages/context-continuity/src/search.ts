@@ -269,6 +269,11 @@ interface SessionAccess {
   measurement(source: ContextTimelineSource): Promise<SurfaceMeasurement | undefined>
 }
 
+function usableMeasurement(metered: SurfaceMeasurement | undefined): SurfaceMeasurement | undefined {
+  if (metered === undefined || !Array.isArray(metered.nodes) || metered.nodes.length === 0) return undefined
+  return metered
+}
+
 function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec: ToolRunContext): SessionAccess {
   const reads = new Map<string, Promise<SourceRead>>()
   const measurements = new Map<string, Promise<SurfaceMeasurement | undefined>>()
@@ -308,10 +313,9 @@ function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec
       const pending = (async (): Promise<SurfaceMeasurement | undefined> => {
         if (adapter.measureSource === undefined) return undefined
         try {
-          const measured = await adapter.measureSource(source, exec)
           // A measurement that prices no node prices no prefix either: it is an
           // unknown, and an unknown is never offered as an affordable return.
-          return measured !== undefined && measured.nodes.length > 0 ? measured : undefined
+          return usableMeasurement(await adapter.measureSource(source, exec))
         } catch {
           // An unmeasured source is not a free one: the anchor policy refuses it.
           return undefined
@@ -532,7 +536,9 @@ async function returnAnchorFor<SubjectId>(
   let nearestRejection: string | undefined
   for (const candidate of after) {
     const retained = retainedPrice(measurement, candidate.turnEndSeq) ?? 0
-    const rejection = anchorRejection(candidate, retained, measurement?.totalTokens, handoffAt, adapter.config.host)
+    const rejection = anchorRejection(candidate, retained, measurement?.totalTokens, handoffAt, {
+      host: adapter.config.host,
+    })
     if (rejection === undefined) return { available: true, ref: candidate.ref, label: candidate.label }
     nearestRejection ??= rejection
   }

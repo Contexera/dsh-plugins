@@ -47,3 +47,11 @@ which of a host's own boundary kinds close a context rather than open a topic â€
 is one host rule (`host.boundaryRestorableFor`) asked by both surfaces that
 offer a return anchor, so a ref the timeline offers is a ref `context_rollover`
 accepts.
+
+The shared anchor rule is exported so both of a host's surfaces ask the same
+one: `anchorCandidates`, `anchorRejection`, and `retainedPrice`, with an optional
+`AnchorRule` carrying the host's `boundaryRestorableFor` and the nouns its
+reasons are worded in (`ContextTimelineRequest.anchorText`) â€” the rule stays the
+engine's, the words stay the reader's. A measurement that prices no node (a meter
+reporting only a total, or not a measurement at all) reads as unmeasurable, which
+is fail-closed rather than a failure on the read path.

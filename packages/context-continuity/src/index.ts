@@ -119,7 +119,7 @@ export type {
  * executed later against mutable state has to answer identically.
  */
 export { anchorCandidates, anchorRejection, retainedPrice } from './anchor.ts'
-export type { AnchorCandidate, AnchorSourceKind } from './anchor.ts'
+export type { AnchorCandidate, AnchorReasonText, AnchorRule, AnchorSourceKind } from './anchor.ts'
 
 export {
   CONTEXT_SEARCH_RESULT_LIMIT,
