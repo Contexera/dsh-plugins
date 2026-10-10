@@ -35,6 +35,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { isDroppedNotice, type ContextContinuityHost } from './host.ts'
 import type { ContextMessageCodec } from './message-codec.ts'
+import type { AnchorCandidate } from './anchor.ts'
 import type {
   CarriedCandidate,
   ContextCheckpointEntry,
@@ -111,6 +112,18 @@ export interface ContextProjectionHost extends Pick<ContextContinuityHost<never>
   tracksCall?(name: string, raw: string): boolean
   /** The host's boundary for one event, or undefined when the event anchors nothing. */
   domainBoundaryOf?(input: DomainBoundaryInput): DomainBoundaryContribution | undefined
+  /**
+   * Why one of this host's own boundaries may not be entered again, or
+   * `undefined` when it may. The engine applies every rule that holds for any
+   * subject — a boundary must resolve at a completed turn, the topics its
+   * retained prefix carries must be exactly one, and the budget must leave room
+   * — and asks this for the one rule no shared vocabulary can state: which of
+   * the host's own boundary kinds close a context rather than open a topic.
+   *
+   * Asked by both surfaces that offer a return anchor, so the timeline cannot
+   * offer a ref the rollover guard refuses.
+   */
+  boundaryRestorableFor?(candidate: AnchorCandidate): string | undefined
 }
 
 /** How one fold reads the log: the codec it recognizes and the host it asks. */

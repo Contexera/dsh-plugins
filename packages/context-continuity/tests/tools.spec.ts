@@ -974,7 +974,7 @@ describe('text: the timeline vocabulary a domain-rich host needs', () => {
   it('names the attributable subject in the host vocabulary, in both the description and the render', async () => {
     const spy = adapterSpy()
     const tools = createContinuityTools(spy.adapter, { topicNoun: 'Thread', topicNounPlural: 'Threads' })
-    expect(tools.status.description).toContain('attributable to exactly one Thread')
+    expect(tools.status.description).toContain("exactly one Thread's facts")
     expect(tools.status.description).toContain('the Threads whose facts entered your context')
     const { exec } = execution()
     const value = await tools.status.execute({}, exec)
@@ -986,7 +986,7 @@ describe('text: the timeline vocabulary a domain-rich host needs', () => {
 
   it('defaults the attributable-subject vocabulary to `topic`', () => {
     const tools = createContinuityTools(adapterSpy().adapter)
-    expect(tools.status.description).toContain('attributable to exactly one topic')
+    expect(tools.status.description).toContain("exactly one topic's facts")
   })
 })
 

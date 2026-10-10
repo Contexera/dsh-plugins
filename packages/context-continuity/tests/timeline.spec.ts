@@ -6,8 +6,9 @@
  * walk (current generation, then archived ancestors through the read seam), the
  * dedupe, the per-source pricing, and the shared restorable-anchor rule. It
  * owns no measurement and no domain vocabulary: an unmeasurable source fails
- * closed instead of pricing as free, a boundary is judged by the host's own
- * `attributions`, and an unreadable ancestor truncates the walk loudly.
+ * closed instead of pricing as free, a boundary is judged by the topics a return
+ * would keep plus the host's own rule for its kinds, and an unreadable ancestor
+ * truncates the walk loudly.
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -40,6 +41,7 @@ import {
   type ContextTimelineSource,
 } from '../src/timeline.ts'
 import type { StoredSessionInspection, StoredSessionReadResult } from '../src/stored-session-reader.ts'
+import type { SurfaceMeasurement } from '../src/compaction.ts'
 import { PLUGIN_ID } from './test-producer.ts'
 
 const CURRENT = SessionId('session-current')
@@ -172,6 +174,16 @@ function inspectionOf(sessionId: SessionId, events: readonly SessionEvent[], par
   }
 }
 
+/** One source's measured surface: nodes at the stated seqs, priced in tokens. */
+function priced(entries: readonly (readonly [number, number])[]): SurfaceMeasurement {
+  return { totalTokens: entries.reduce((sum, [, tokens]) => sum + tokens, 0), nodes: entries.map(([seq, tokens]) => ({ seq: SessionSeq(seq), tokens })) }
+}
+
+/** One source measured flat: every log position is one surface node at `tokens`. */
+function flatPriced(source: ContextTimelineSource, tokens = 100): SurfaceMeasurement {
+  return priced(source.events.map((event, seq) => [Number(event.seq), tokens]))
+}
+
 /** The reader a current-generation-only timeline never needs to call. */
 const noAncestors = async (sessionId: SessionId): Promise<StoredSessionReadResult> => {
   throw new Error(`unexpected ancestor read: ${sessionId}`)
@@ -182,7 +194,7 @@ function requestOf(overrides: Partial<ContextTimelineRequest> & Pick<ContextTime
   return {
     config,
     readAncestor: noAncestors,
-    measureSource: () => 700,
+    measureSource: source => flatPriced(source),
     currentUsageTokens: 1000,
     handoffAt: 200_000,
     ...overrides,
@@ -308,6 +320,36 @@ describe('pricing honesty', () => {
       reason: 'retained context would not materially shrink the working set',
     })
   })
+
+  it('prices a retained prefix by the nodes it keeps, not by the share of the log it covers', async () => {
+    // One oversized tool call inside the checkpoint's prefix, and a long cheap
+    // stretch after it. The share of the log that prefix covers calls it small;
+    // the nodes it keeps are what entering that anchor would actually cost.
+    const events = log(
+      turnStart(1),
+      toolCall(1, 'call-cp', CONTEXT_CHECKPOINT_TOOL_NAME, { name: 'anchor' }),
+      toolResult(1, 'call-cp'),
+      turnEnd(1),
+      turnStart(2), notice('filler'), turnEnd(2),
+      turnStart(3), notice('filler'), turnEnd(3),
+      turnStart(4), notice('filler'), turnEnd(4),
+    )
+    const timeline = await readContextTimeline(requestOf({
+      current: sourceOf(CURRENT, events),
+      measureSource: source => priced(source.events.map((event, seq) => [
+        Number(event.seq),
+        Number(event.seq) === 1 || Number(event.seq) === 2 ? 4_000 : 100,
+      ])),
+      handoffAt: 5_000,
+    }))
+    const anchor = itemOf(timeline, 'checkpoint')!
+    // The prefix keeps the oversized call and its result: 8,200 of the 9,100
+    // priced nodes, where its 4-of-13 share of the log would have read 2,800
+    // and reported the same anchor as affordable.
+    expect(anchor.retainedTokens).toBe(8_200)
+    expect(anchor.restorable).toBe(false)
+    expect(anchor.reason).toBe('retained context would be at or above the handoff budget')
+  })
 })
 
 describe('boundary attribution', () => {
@@ -346,6 +388,50 @@ describe('boundary attribution', () => {
     }))
     expect(itemOf(timeline, 'boundary')?.reason).toBe('multiple topics entered the context through this boundary; write a fresh handoff instead')
   })
+
+  it('judges what the retained prefix carries, not only what the boundary arrived with', async () => {
+    // The second boundary is attributable to exactly one Thread, so a rule about
+    // the boundary's own topics accepts it — and the prefix a return would keep
+    // carries both. Entering that anchor is entering a context holding two
+    // topics' facts, which is what the rule has to refuse.
+    const timeline = await readContextTimeline(requestOf({
+      current: sourceOf(CURRENT, log(
+        turnStart(1),
+        notice('Thread: thread:aaaa-1111 arrival'),
+        turnEnd(1),
+        turnStart(2),
+        notice('Thread: thread:bbbb-2222 arrival'),
+        turnEnd(2),
+      )),
+    }))
+    const boundary = itemOf(timeline, 'boundary')!
+    expect(boundary.ref).toBe(`team-boundary:${CURRENT}:4`)
+    expect(boundary.affectedTopics).toEqual(['thread:aaaa-1111', 'thread:bbbb-2222'])
+    expect(boundary.restorable).toBe(false)
+    expect(boundary.reason).toBe('multiple topics entered the context through this boundary; write a fresh handoff instead')
+  })
+
+  it('asks the host which of its own boundary kinds closed a context, before any shared rule', async () => {
+    // A host-declared kind is domain vocabulary: the engine sees only a string.
+    // Both readers ask the same host rule, so neither can offer a ref the other
+    // refuses.
+    const handoff: DomainBoundaryContribution = { kind: 'handoff', label: 'context handoff', topics: ['thread:aaaa-1111'] }
+    const host: ContextProjectionHost = {
+      ...config.host,
+      domainBoundaryOf: () => handoff,
+      boundaryRestorableFor: candidate => (candidate.kind === 'handoff'
+        ? 'a handoff closes a context; unwinding into it is not a proven-safe target'
+        : undefined),
+    }
+    const timeline = await readContextTimeline(requestOf({
+      current: sourceOf(CURRENT, log(turnStart(1), notice('a handoff'), turnEnd(1))),
+      config: { ...config, host },
+    }))
+    const boundary = itemOf(timeline, 'boundary')!
+    expect(boundary.affectedTopics).toEqual(['thread:aaaa-1111'])
+    expect(boundary.restorable).toBe(false)
+    expect(boundary.reason).toBe('a handoff closes a context; unwinding into it is not a proven-safe target')
+  })
 })
 
 describe('the lineage walk', () => {
@@ -359,7 +445,7 @@ describe('the lineage walk', () => {
     const timeline = await readContextTimeline(requestOf({
       current: sourceOf(CURRENT, currentEvents, { parent: PARENT }),
       readAncestor: async sessionId => ({ ok: true, inspection: inspectionOf(sessionId, parentEvents) }),
-      measureSource: source => (source.sessionId === CURRENT ? 100 : 10_000),
+      measureSource: source => flatPriced(source, source.sessionId === CURRENT ? 30 : 25),
     }))
 
     // The same call id in two generations yields two distinct refs — the child
@@ -376,8 +462,8 @@ describe('the lineage walk', () => {
     // and returning into an ancestor replaces this whole generation.
     expect(timeline.items.map(item => [item.retainedTokens, item.discardedTokens])).toEqual([
       [1000, 0],
-      [67, 933],
-      [10_000, 1000],
+      [120, 880],
+      [100, 1000],
     ])
     // An archived generation has no "current head": that is exactly what it is not.
     expect(timeline.items.filter(item => item.source === 'head')).toHaveLength(1)

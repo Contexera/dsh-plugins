@@ -13,13 +13,15 @@
  * Two things this module deliberately does not own:
  *
  * - **Measurement.** The engine is a pure library with no `ctx`, so the meter
- *   arrives as {@link ContextTimelineRequest.measureSource}. An unmeasurable
+ *   arrives as {@link ContextTimelineRequest.measureSource} and prices each
+ *   anchor node by node out of the source's own measurement. An unmeasurable
  *   source prices as unknown, never as zero: its candidates stay visible and
  *   say why they are not selectable, which is the fail-closed direction.
  * - **Domain meaning.** A boundary's `attributions` are the host's contribution
  *   (a Team Thread, a Loom continuity line); the engine only applies the shared
  *   rule — a boundary is a selectable default anchor exactly when it resolved
- *   at a completed turn and is attributable to exactly one topic.
+ *   at a completed turn and the topics its retained prefix carries are exactly
+ *   one — and the host's own rule for the kinds only it can judge.
  *
  * That rule and the pricing are not this module's private judgement: they live
  * in {@link anchor.ts} because a search hit's enrichment answers the same
@@ -33,9 +35,10 @@
  */
 
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import { anchorCandidates, anchorRejection, retainedEstimate, type AnchorCandidate, type AnchorSourceKind } from './anchor.ts'
+import { anchorCandidates, anchorRejection, retainedPrice, type AnchorCandidate, type AnchorSourceKind } from './anchor.ts'
 import { foldContextProjection, type ContextProjectionConfig } from './projection.ts'
 import type { ContextProjectionState } from './projection-state.ts'
+import type { SurfaceMeasurement } from './compaction.ts'
 import type { StoredSessionReadResult } from './stored-session-reader.ts'
 
 /** How many archived ancestors one walk follows by default. */
@@ -78,8 +81,9 @@ export interface ContextTimelineItem {
   readonly discardedTokens: number
   /**
    * Topics whose facts had entered this generation's context by this anchor:
-   * what the host attributed to the boundaries resolved by then. Display only —
-   * the restorable rule below reads a boundary's own attributions.
+   * what the host attributed to the boundaries resolved by then. These are the
+   * topics a return would keep, so the restorable rule reads this and not the
+   * boundary's own attributions.
    */
   readonly affectedTopics: readonly string[]
   /** Whether `context_rollover` accepts this ref as a seed target. */
@@ -158,11 +162,12 @@ export interface ContextTimelineRequest {
   /** Reads one archived ancestor's stored log; the host wraps its own stored-Session reader. */
   readonly readAncestor: (sessionId: SessionId) => Promise<StoredSessionReadResult>
   /**
-   * One source's replayed token measurement, in that source's own tokens. Omit
-   * when no meter exists: every candidate then reports that its budget cannot
-   * be proven, rather than being priced as free.
+   * One source's replayed measurement, in that source's own tokens and node by
+   * node. Omit when no meter exists: every candidate then reports that its
+   * budget cannot be proven, rather than being priced as free. A measurement
+   * with no nodes prices nothing either, for the same reason.
    */
-  readonly measureSource?: (source: ContextTimelineSource) => number | undefined | Promise<number | undefined>
+  readonly measureSource?: (source: ContextTimelineSource) => SurfaceMeasurement | undefined | Promise<SurfaceMeasurement | undefined>
   /** The current generation's measured usage; the head prices against it. */
   readonly currentUsageTokens: number
   /** The retained-context budget above which a return target stops being worth selecting. */
@@ -178,28 +183,21 @@ export interface ContextTimelineRequest {
   readonly maxAncestors?: number
 }
 
-/** The topics the host had attributed to boundaries resolved by one anchor, order-stable and deduplicated. */
-function topicsThrough(state: ContextProjectionState, turnEndSeq: number): readonly string[] {
-  const topics: string[] = []
-  for (const boundary of state.boundaries) {
-    if (boundary.turnEndSeq === -1 || boundary.turnEndSeq > turnEndSeq) continue
-    for (const topic of boundary.attributions) if (!topics.includes(topic)) topics.push(topic)
-  }
-  return topics
-}
-
 /** Price and annotate one candidate of one source; nothing here mutates the fold. */
 function itemFor(
   candidate: AnchorCandidate,
   state: ContextProjectionState,
   source: ContextTimelineSource,
   isCurrent: boolean,
-  sourceUsage: number | undefined,
+  measurement: SurfaceMeasurement | undefined,
   request: ContextTimelineRequest,
 ): ContextTimelineItem {
   const retainedTokens = candidate.source === 'head'
     ? request.currentUsageTokens
-    : retainedEstimate(sourceUsage ?? 0, source.events.length, candidate.turnEndSeq)
+    // Zero only alongside the reason that says the price is unknown, never as
+    // a price of its own: an anchor nobody could measure is not an affordable
+    // one.
+    : retainedPrice(measurement, candidate.turnEndSeq) ?? 0
   // Returning inside the current generation replaces its suffix; returning to
   // an ancestor replaces this whole generation (an approximation: the
   // ancestor's own suffix is not part of it). Both numbers say so honestly.
@@ -208,7 +206,7 @@ function itemFor(
     : isCurrent
       ? Math.max(0, request.currentUsageTokens - retainedTokens)
       : request.currentUsageTokens
-  const reason = anchorRejection(candidate, retainedTokens, sourceUsage, request.handoffAt)
+  const reason = anchorRejection(candidate, retainedTokens, measurement?.totalTokens, request.handoffAt, request.config.host)
   return {
     ref: candidate.ref,
     label: candidate.label,
@@ -216,7 +214,7 @@ function itemFor(
     ...(candidate.kind === undefined ? {} : { kind: candidate.kind }),
     retainedTokens,
     discardedTokens,
-    affectedTopics: topicsThrough(state, candidate.turnEndSeq),
+    affectedTopics: candidate.topicsThrough,
     restorable: reason === undefined,
     ...(reason === undefined ? {} : { reason }),
     ...(isCurrent ? {} : { sourceSessionId: source.sessionId }),
@@ -249,11 +247,13 @@ export async function readContextTimeline(request: ContextTimelineRequest): Prom
       inheritedEventCount: Number(source.inheritedEventCount),
     })
     const measured = request.measureSource === undefined ? undefined : await request.measureSource(source)
-    const sourceUsage = typeof measured === 'number' && Number.isFinite(measured) ? measured : undefined
+    // A measurement that prices no node at all cannot price a prefix: it is an
+    // unknown, not a free context.
+    const measurement = measured !== undefined && measured.nodes.length > 0 ? measured : undefined
     for (const candidate of anchorCandidates(state, request.config.host, isCurrent).slice(0, limit)) {
       if (seen.has(candidate.ref)) continue
       seen.add(candidate.ref)
-      items.push(itemFor(candidate, state, source, isCurrent, sourceUsage, request))
+      items.push(itemFor(candidate, state, source, isCurrent, measurement, request))
       if (items.length >= limit) break
     }
     if (items.length >= limit) break

@@ -35,7 +35,8 @@ import type {
   SessionSearchRequest,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { anchorCandidates, anchorRejection, retainedEstimate } from './anchor.ts'
+import { anchorCandidates, anchorRejection, retainedPrice } from './anchor.ts'
+import type { SurfaceMeasurement } from './compaction.ts'
 import { contextRefFor } from './context-ref.ts'
 import { foldContextProjection, type ContextProjectionConfig } from './projection.ts'
 import type { ContextProjectionState } from './projection-state.ts'
@@ -111,8 +112,8 @@ export interface ContextSearchAdapter<SubjectId> {
   query: ContextSearchPort
   /** The fold configuration shared with the registered projection unit. */
   config: ContextProjectionConfig
-  /** One source's replayed measurement; absent means no meter exists. */
-  measureSource?(source: ContextTimelineSource, exec: ToolRunContext): number | undefined | Promise<number | undefined>
+  /** One source's replayed measurement, node by node; absent means no meter exists. */
+  measureSource?(source: ContextTimelineSource, exec: ToolRunContext): SurfaceMeasurement | undefined | Promise<SurfaceMeasurement | undefined>
   /** The retained-context budget above which a return anchor stops being worth selecting. */
   handoffAt(exec: ToolRunContext): number | Promise<number>
   /** How many archived ancestors the active-lineage walk follows. */
@@ -265,12 +266,12 @@ function describeFailure(error: unknown): string {
  */
 interface SessionAccess {
   source(sessionId: SessionId): Promise<SourceRead>
-  usage(source: ContextTimelineSource): Promise<number | undefined>
+  measurement(source: ContextTimelineSource): Promise<SurfaceMeasurement | undefined>
 }
 
 function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec: ToolRunContext): SessionAccess {
   const reads = new Map<string, Promise<SourceRead>>()
-  const usage = new Map<string, Promise<number | undefined>>()
+  const measurements = new Map<string, Promise<SurfaceMeasurement | undefined>>()
   return {
     source(sessionId) {
       const cached = reads.get(String(sessionId))
@@ -301,20 +302,22 @@ function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec
       reads.set(String(sessionId), pending)
       return pending
     },
-    usage(source) {
-      const cached = usage.get(String(source.sessionId))
+    measurement(source) {
+      const cached = measurements.get(String(source.sessionId))
       if (cached !== undefined) return cached
-      const pending = (async (): Promise<number | undefined> => {
+      const pending = (async (): Promise<SurfaceMeasurement | undefined> => {
         if (adapter.measureSource === undefined) return undefined
         try {
           const measured = await adapter.measureSource(source, exec)
-          return typeof measured === 'number' && Number.isFinite(measured) ? measured : undefined
+          // A measurement that prices no node prices no prefix either: it is an
+          // unknown, and an unknown is never offered as an affordable return.
+          return measured !== undefined && measured.nodes.length > 0 ? measured : undefined
         } catch {
           // An unmeasured source is not a free one: the anchor policy refuses it.
           return undefined
         }
       })()
-      usage.set(String(source.sessionId), pending)
+      measurements.set(String(source.sessionId), pending)
       return pending
     },
   }
@@ -525,11 +528,11 @@ async function returnAnchorFor<SubjectId>(
   if (after.length === 0) {
     return { available: false, reason: 'no anchor on that generation ends at or after the hit, so no return prefix would contain it' }
   }
-  const sourceUsage = await access.usage(read.value.source)
+  const measurement = await access.measurement(read.value.source)
   let nearestRejection: string | undefined
   for (const candidate of after) {
-    const retained = retainedEstimate(sourceUsage ?? 0, read.value.source.events.length, candidate.turnEndSeq)
-    const rejection = anchorRejection(candidate, retained, sourceUsage, handoffAt)
+    const retained = retainedPrice(measurement, candidate.turnEndSeq) ?? 0
+    const rejection = anchorRejection(candidate, retained, measurement?.totalTokens, handoffAt, adapter.config.host)
     if (rejection === undefined) return { available: true, ref: candidate.ref, label: candidate.label }
     nearestRejection ??= rejection
   }

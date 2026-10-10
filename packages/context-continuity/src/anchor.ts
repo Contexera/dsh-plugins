@@ -19,6 +19,7 @@
 
 import type { ContextProjectionHost } from './projection.ts'
 import type { ContextProjectionState } from './projection-state.ts'
+import type { SurfaceMeasurement } from './compaction.ts'
 
 /** Which structural source produced one anchor. */
 export type AnchorSourceKind = 'checkpoint' | 'boundary' | 'head'
@@ -36,22 +37,45 @@ export interface AnchorCandidate {
   readonly seq: number
   /** The completed turn the anchor resolved at, or `-1` while it is unresolved. */
   readonly turnEndSeq: number
-  /** The boundary's own topics; empty for checkpoints and the head. */
-  readonly attributions: readonly string[]
+  /**
+   * The topics whose facts had entered this generation's context by this
+   * anchor — what the retained prefix would carry, not what the anchor's own
+   * boundary arrived with. A return target whose prefix holds a second topic's
+   * facts is a seed that would have to hand off two things.
+   */
+  readonly topicsThrough: readonly string[]
 }
 
 /**
- * Monotonic anchor-share estimate of a seed's retained cost, priced in the
- * SOURCE Session's own measurement: the fraction of the source log the seed
- * prefix covers, scaled to the source's replayed token count. The anchor
- * position is exact and the share grows monotonically toward the source's head,
- * so a large ancestor's anchor prices at the ancestor's real size even inside a
- * small current generation.
+ * The exact cost of entering one anchor: what its seed prefix would keep,
+ * priced node by node out of the source's own measurement.
+ *
+ * An estimate over the log's shape is not good enough here, and the number is
+ * not decorative: it is what decides whether a return is offered at all. The
+ * nodes are the model-visible ones, so the sum is what the successor would
+ * actually pay for the prefix — whereas a share of the source's total can
+ * underprice a prefix that holds an oversized tool result and misreport an
+ * anchor past the budget as affordable. `undefined` when the source prices
+ * nothing node by node: an unmeasurable prefix is never a cheap one.
  */
-export function retainedEstimate(sourceUsageTokens: number, sourceLength: number, anchorTurnEndSeq: number): number {
-  if (sourceLength <= 0) return sourceUsageTokens
-  const share = Math.min(1, Math.max(0, (anchorTurnEndSeq + 1) / sourceLength))
-  return Math.round(sourceUsageTokens * share)
+export function retainedPrice(
+  measurement: SurfaceMeasurement | undefined,
+  anchorTurnEndSeq: number,
+): number | undefined {
+  if (measurement === undefined || measurement.nodes.length === 0) return undefined
+  let tokens = 0
+  for (const node of measurement.nodes) if (Number(node.seq) <= anchorTurnEndSeq) tokens += node.tokens
+  return tokens
+}
+
+/** The topics the host attributed to boundaries resolved by one anchor, order-stable and deduplicated. */
+function topicsThrough(state: ContextProjectionState, turnEndSeq: number): readonly string[] {
+  const topics: string[] = []
+  for (const boundary of state.boundaries) {
+    if (boundary.turnEndSeq === -1 || boundary.turnEndSeq > turnEndSeq) continue
+    for (const topic of boundary.attributions) if (!topics.includes(topic)) topics.push(topic)
+  }
+  return topics
 }
 
 /**
@@ -79,7 +103,7 @@ export function anchorCandidates(
       source: 'checkpoint',
       seq: checkpoint.resultSeq,
       turnEndSeq: checkpoint.turnEndSeq,
-      attributions: [],
+      topicsThrough: [],
     })
   }
   for (const boundary of state.boundaries) {
@@ -94,7 +118,7 @@ export function anchorCandidates(
       kind: boundary.kind,
       seq: boundary.resultSeq,
       turnEndSeq: boundary.turnEndSeq,
-      attributions: boundary.attributions,
+      topicsThrough: topicsThrough(state, boundary.turnEndSeq),
     })
   }
   if (includeHead && state.lastTurnEndSeq !== -1) {
@@ -104,7 +128,7 @@ export function anchorCandidates(
       source: 'head',
       seq: state.lastTurnEndSeq,
       turnEndSeq: state.lastTurnEndSeq,
-      attributions: [],
+      topicsThrough: topicsThrough(state, state.lastTurnEndSeq),
     })
   }
   return candidates.sort((a, b) => b.turnEndSeq - a.turnEndSeq || b.seq - a.seq)
@@ -113,13 +137,23 @@ export function anchorCandidates(
 /**
  * Why one candidate is not a selectable return anchor, or `undefined` when it
  * is. The order is deliberate: what the anchor *is* decides before what it
- * costs, so a multi-topic boundary never reads as a budget problem.
+ * costs, so a boundary carrying two topics never reads as a budget problem.
+ *
+ * The topic rule reads the anchor's retained prefix rather than the boundary's
+ * own attributions, because that is what a return would carry: a boundary may
+ * be the first place one topic's facts surfaced while an earlier boundary
+ * already carried another's, and unwinding to it hands a successor a context
+ * holding both. Every surface that offers a return anchor asks here, so the
+ * timeline cannot offer a ref the rollover guard refuses; and the host's own
+ * rule is asked between the shared ones, because only it can say which of its
+ * boundary kinds closed a context instead of opening a topic.
  */
 export function anchorRejection(
   candidate: AnchorCandidate,
   retainedTokens: number,
   sourceUsage: number | undefined,
   handoffAt: number,
+  host?: ContextProjectionHost,
 ): string | undefined {
   if (candidate.source === 'head') return 'the head is the current working set; returning to it discards nothing'
   if (sourceUsage === undefined) {
@@ -127,10 +161,14 @@ export function anchorRejection(
     // like an available target.
     return 'the source Session\'s context cost cannot be measured, so the return budget cannot be proven'
   }
-  if (candidate.source === 'boundary' && candidate.attributions.length !== 1) {
-    return candidate.attributions.length === 0
-      ? 'no single topic is attributable to this boundary'
-      : 'multiple topics entered the context through this boundary; write a fresh handoff instead'
+  if (candidate.source === 'boundary') {
+    const domain = host?.boundaryRestorableFor?.(candidate)
+    if (domain !== undefined) return domain
+    if (candidate.topicsThrough.length !== 1) {
+      return candidate.topicsThrough.length === 0
+        ? 'no single topic is attributable to this boundary'
+        : 'multiple topics entered the context through this boundary; write a fresh handoff instead'
+    }
   }
   if (retainedTokens >= handoffAt) {
     return candidate.source === 'boundary'

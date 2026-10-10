@@ -87,9 +87,9 @@ export interface DomainBoundary {
   /**
    * Opaque domain topic ids this boundary is attributable to. The shared
    * restorable-anchor policy treats a boundary as a selectable default anchor
-   * exactly when it resolved at a completed turn and is attributable to exactly
-   * one topic; the host defines what a topic is (Team: a Thread; a harness:
-   * a continuity subject line).
+   * exactly when it resolved at a completed turn and the topics carried by the
+   * prefix a return would keep are exactly one; the host defines what a topic
+   * is (Team: a Thread; a harness: a continuity subject line).
    */
   readonly attributions: readonly string[]
 }

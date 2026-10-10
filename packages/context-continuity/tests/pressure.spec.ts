@@ -64,6 +64,21 @@ function plainEvent(seq: number): SessionEvent {
   return { type: 'tool/result', seq: SessionSeq(seq), time: 0, data: {} } as unknown as SessionEvent
 }
 
+/** One `turn/start`: the loop writes it for the arriving turn before any pre-step runs. */
+function turnStart(seq: number, idleMs: number): SessionEvent {
+  return { type: 'turn/start', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1 } } as unknown as SessionEvent
+}
+
+/** One `turn/end`: the durable record that a generation finished its turn here. */
+function turnEnd(seq: number, idleMs: number): SessionEvent {
+  return { type: 'turn/end', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1, reason: { kind: 'completed' } } } as unknown as SessionEvent
+}
+
+/** One completed in-place compaction, the durable record that the content was replaced. */
+function compactionEnd(seq: number): SessionEvent {
+  return { type: 'compaction/end', seq: SessionSeq(seq), time: 0, data: { compactionId: 'c1', turn: 1 } } as unknown as SessionEvent
+}
+
 /** One subject's durable log, numbered by position as the Session contract requires. */
 function span(sessionId: string, inheritedEventCount: number, ...events: readonly SessionEvent[]): PressureLogSpan {
   return { sessionId, inheritedEventCount, events }
@@ -206,14 +221,6 @@ function policyFor(host: FakeHost, gate: PressureGate = {}): ContextPressurePoli
   return policy
 }
 
-/**
- * One durable event this many milliseconds old. The gate reads the gap from the
- * newest event's own timestamp, so a test states the gap rather than the clock.
- */
-function idleEvent(idleMs: number): SessionEvent {
-  return { type: 'tool/result', seq: SessionSeq(0), time: Date.now() - idleMs, data: {} } as unknown as SessionEvent
-}
-
 function signal(): AbortSignal {
   return new AbortController().signal
 }
@@ -293,6 +300,28 @@ describe('the pressure ladder: budget, notice, limit', () => {
     expect(host.steered).toHaveLength(2)
   })
 
+  it('an in-place compaction starts a new context, so the notice sent into the old one does not count', async () => {
+    // Compaction is the notice's own default action: the subject that takes it
+    // stays in this Session, and the context it is now working in is a fresh
+    // one. Pressure climbing back over the budget there has to tell it again.
+    const host = new FakeHost()
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    host.log = span('session-1', 0, turnStart(0, 90_000), noticeEvent(1), turnEnd(2, 60_000), compactionEnd(3), turnStart(4, 0))
+    const policy = policyFor(host)
+    expect((await policy.onPreStep('subject-1', signal())).kind).toBe('notice')
+    // The notice just steered is itself after the compaction, so the next step
+    // is quiet: re-arming means one notice per context, not one per call.
+    expect((await policy.onPreStep('subject-1', signal())).kind).toBe('continue')
+    expect(host.steered).toHaveLength(1)
+  })
+
+  it('a notice recorded after the compaction is what latches, and an older one is history', async () => {
+    const host = new FakeHost()
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    host.log = span('session-1', 0, turnStart(0, 90_000), noticeEvent(1), turnEnd(2, 60_000), compactionEnd(3), noticeEvent(4), turnStart(5, 0))
+    expect((await policyFor(host).onPreStep('subject-1', signal())).kind).toBe('continue')
+  })
+
   it('a restart over the same log stays quiet: the latch is durable evidence, not process state', async () => {
     const host = new FakeHost()
     host.limits = { usageTokens: 200_000, hardLimit: 256_000, handoffAt: 200_000 }
@@ -345,7 +374,7 @@ describe('the pressure ladder: budget, notice, limit', () => {
     expect(host.steered).toHaveLength(0)
   })
 
-  it('the latch resumes over an appended span without folding it again', async () => {
+  it('every step re-reads the span, and a notice already in it keeps the step quiet', async () => {
     const host = new FakeHost()
     host.limits = { usageTokens: 200_000, hardLimit: 256_000, handoffAt: 200_000 }
     const policy = policyFor(host)
@@ -362,11 +391,9 @@ describe('the pressure ladder: budget, notice, limit', () => {
     host.limits = { usageTokens: 200_000, hardLimit: 256_000, handoffAt: 200_000 }
     const policy = policyFor(host)
     await policy.onPreStep('subject-1', signal())
-    // The second step is what latches *on* the recorded notice: the latch then
-    // holds `delivered` plus the event it stopped on.
     expect((await policy.onPreStep('subject-1', signal())).kind).toBe('continue')
-    // The same log, at the same length, rewritten in place: the event the latch
-    // stopped on is gone, so it must re-fold cold instead of trusting its value.
+    // The same log, at the same length, rewritten in place without the notice:
+    // the durable evidence is what is folded, so it must be re-delivered.
     host.log = span('session-1', 0, plainEvent(0))
     expect((await policy.onPreStep('subject-1', signal())).kind).toBe('notice')
     expect(host.steered).toHaveLength(2)
@@ -644,7 +671,9 @@ describe('the long-gap relatedness gate', () => {
     host.limits = { usageTokens: options.usageTokens ?? 150_000, hardLimit: 256_000, handoffAt: 200_000 }
     host.relatedness = { input: 'what is the status of the release?', recent: ['add the release window docs'] }
     host.answering(options.judge ?? 0.05)
-    host.log = span('session-1', 0, idleEvent(options.idleMs ?? 45 * 60_000))
+    // The shape a real span has at pre-step: the turn that just opened, after
+    // the last one the generation finished `idleMs` ago.
+    host.log = span('session-1', 0, turnStart(0, options.idleMs ?? 45 * 60_000), turnEnd(1, options.idleMs ?? 45 * 60_000))
     return host
   }
 
@@ -661,6 +690,28 @@ describe('the long-gap relatedness gate', () => {
     expect(noticeText(instruction)).toContain('context_rollover')
     expect(noticeText(instruction)).toContain('what is the status of the release?')
     expect(host.logs.some(entry => entry.message.includes('the step is held for one rollover'))).toBe(true)
+  })
+
+  it('measures the gap from the turn the generation finished, not the turn the arrival opened', async () => {
+    // The loop appends `turn/start` for the arriving turn *before* the pre-step
+    // waterfall runs, so a real span at this call ends with an event stamped now
+    // while the previous turn ended 45 minutes ago. The gap the gate means is
+    // the second one.
+    const host = gated()
+    host.log = span('session-1', 0, turnStart(0, 45 * 60_000), turnEnd(1, 45 * 60_000), turnStart(2, 0))
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('hold')
+    expect(host.judgeCalls).toHaveLength(1)
+  })
+
+  it('a turn that has never ended leaves no measurable gap, and is not held', async () => {
+    // The arriving turn has opened but no turn has completed in this span yet:
+    // the generation has not been away, it is starting.
+    const host = gated()
+    host.log = span('session-1', 0, turnStart(0, 60 * 60_000))
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
   })
 
   it('the question carries the input and the recent requests, and its own deadline', async () => {

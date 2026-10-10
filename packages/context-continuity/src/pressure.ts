@@ -4,8 +4,11 @@
  *
  * Two thresholds, one order, and no host-side re-derivation of either. Below the
  * handoff budget nothing happens. At it, one structured notice is steered into
- * the running turn — once per generation, latched by durable Session evidence
+ * the running turn — once per context, latched by durable Session evidence
  * rather than process state, so a restart stays quiet and a rollover re-arms.
+ * A context that was replaced in place — a compaction, the notice's own default
+ * action — is a new context by the same standard, so a notice written into the
+ * replaced one is history and the next one is delivered.
  * At the hard limit the request is forced through a reduction first and fails
  * closed unless that reduction is *proven*: the durable surface advanced, or
  * pressure measurably fell. A subject whose route capacity cannot be resolved is
@@ -362,6 +365,16 @@ function noticeInEvent(pluginId: string, event: SessionEvent): boolean {
   return false
 }
 
+/**
+ * The durable records the Harness's compaction writes, which are how this
+ * policy sees content that was replaced. A notice beyond the newest one was sent
+ * into the context the subject is working in now; a notice before it was sent
+ * into a context that no longer exists. A scope whose own reduction writes no
+ * such record does not re-arm the notice — the direction that leaves a subject
+ * where it already was, never one that tells it twice.
+ */
+const CONTENT_REPLACED = new Set(['compaction/end'])
+
 /** Whether a reduction is proven: the durable surface advanced, or pressure measurably fell. */
 function reductionProven(before: PressureSurface, after: PressureSurface): boolean {
   if (after.generation > before.generation) return true
@@ -373,25 +386,10 @@ function surfaceAdvanced(before: PressureSurface, after: PressureSurface): boole
   return after.generation > before.generation
 }
 
-/** One subject's notice latch: the fold value plus how far it has consumed the own span. */
-interface NoticeLatch {
-  readonly sessionId: string
-  /** How many events of the current own span have been folded. */
-  readonly foldedThrough: number
-  /** The last event folded, by position and type, so a rewritten span is detected. */
-  readonly anchor: { readonly seq: number; readonly type: string } | undefined
-  readonly delivered: boolean
-}
-
-/** Whether the event a latch stopped on still occupies that position with the type it had. */
-function anchorHolds(anchor: { readonly seq: number; readonly type: string } | undefined, event: SessionEvent | undefined): boolean {
-  return anchor !== undefined && event !== undefined && Number(event.seq) === anchor.seq && event.type === anchor.type
-}
-
 /**
  * The one context-pressure policy of one host. It reads budgets and surfaces
  * through the host, steers the notice through the host, and owns the decision
- * order, the once-per-generation latch, and the fail-closed reduction proof.
+ * order, the once-per-context notice latch, and the fail-closed reduction proof.
  */
 export class ContextPressurePolicy<SubjectId> {
   /**
@@ -399,14 +397,6 @@ export class ContextPressurePolicy<SubjectId> {
    * Process-only by design: a restart re-earns one sequence per chain.
    */
   private readonly overflowRetries = new Map<SubjectId, number>()
-
-  /**
-   * Whether the one-shot notice already reached this subject's current
-   * generation, folded incrementally per subject. Identity is the subject, so a
-   * rollover replaces the entry rather than adding one, and the Session id kept
-   * beside it is what stops that replacement from being read as a hit.
-   */
-  private readonly noticeSeen = new Map<SubjectId, NoticeLatch>()
 
   private disposed = false
 
@@ -418,8 +408,8 @@ export class ContextPressurePolicy<SubjectId> {
 
   /**
    * Pre-step policy for one subject: below the handoff budget nothing happens;
-   * at the handoff budget one structured notice per generation is steered into
-   * the running turn; at the hard limit the request is forced through a
+   * at the handoff budget one structured notice per context is steered into the
+   * running turn; at the hard limit the request is forced through a
    * reduction first and refused when that cannot be proven; and a step arriving
    * into a large context after a long gap is put to the relatedness judge first,
    * which may hold it instead.
@@ -540,17 +530,28 @@ export class ContextPressurePolicy<SubjectId> {
   }
 
   /**
-   * How long this subject's generation has been idle, from the newest durable
-   * event it has. Read from the log rather than reported by the host, because a
-   * restart has no memory of when the last turn ran and would otherwise look
-   * like a gap. Undefined when the span carries no event at all: an unmeasurable
-   * gap is not a long gap, and the gate stays off.
+   * How long ago this subject's generation finished its last turn. Read from the
+   * log rather than reported by the host, because a restart has no memory of when
+   * the last turn ran and would otherwise look like a gap.
+   *
+   * The anchor is the newest `turn/end`, not the newest event: the loop appends
+   * the arriving turn's own `turn/start` before this policy runs, so a span's
+   * last event at the pre-step call is stamped *now* while the generation may
+   * have finished its previous turn half an hour earlier. Reading that event
+   * measures the arrival instead of the absence, and the gate can then never
+   * fire. Every event after the newest `turn/end` belongs to the turn that is
+   * opening, so that event is the generation retiring to idle. Undefined when no
+   * turn has completed in the span: an unmeasurable gap is not a long gap, and
+   * the gate stays off.
    */
   private idleMsFor(subject: SubjectId): number | undefined {
     const events = this.host.logSpanFor(subject).events
-    const newest = events[events.length - 1]
-    if (newest === undefined) return undefined
-    return Date.now() - newest.time
+    const lastTurnEnd = events.reduce<SessionEvent | undefined>(
+      (newest, event) => (event.type === 'turn/end' ? event : newest),
+      undefined,
+    )
+    if (lastTurnEnd === undefined) return undefined
+    return Date.now() - lastTurnEnd.time
   }
 
   /**
@@ -624,44 +625,34 @@ export class ContextPressurePolicy<SubjectId> {
   dispose(): void {
     this.disposed = true
     this.overflowRetries.clear()
-    this.noticeSeen.clear()
   }
 
   /**
    * The one-shot pressure notice is durable Session evidence, not process
    * state: a notice already surfaced as a `user/message`, or still queued in a
-   * durable `agent/inbox/spliced` insert, marks the current generation as
-   * already notified. A resume or restart therefore stays quiet, while a
-   * rollover starts a fresh Session whose own span has no notice yet — which is
-   * exactly the documented re-arm. Only the own span counts: a notice inherited
-   * from the generation this one continues belongs to that generation.
+   * durable `agent/inbox/spliced` insert, marks the current context as already
+   * notified. A resume or restart therefore stays quiet, while a rollover starts
+   * a fresh Session whose own span has no notice yet — which is exactly the
+   * documented re-arm. Only the own span counts: a notice inherited from the
+   * generation this one continues belongs to that generation.
+   *
+   * A notice older than the newest content replacement is history, not
+   * evidence. Compaction is the notice's own default action and leaves the
+   * subject in this Session, so without that rule a subject that shortened its
+   * context in place is never told again — pressure climbs back over the budget
+   * in a context nobody has warned it about, and it is first reduced at the hard
+   * limit, where by design there is no subject left to write the summary.
    */
   private noticeDelivered(subject: SubjectId): boolean {
     const span = this.host.logSpanFor(subject)
     const own = span.events.filter(event => Number(event.seq) >= span.inheritedEventCount)
-    const previous = this.noticeSeen.get(subject)
-    // Resume only for the same Session's span, while it still covers what was
-    // folded and the event it stopped on is still there; every other case —
-    // a rollover, a shorter log, a rebuilt one — re-folds cold, which is how a
-    // rollover re-arms and how a lost notice is re-delivered.
-    const resumable = previous !== undefined
-      && previous.sessionId === span.sessionId
-      && previous.foldedThrough <= own.length
-      && (previous.foldedThrough === 0 || anchorHolds(previous.anchor, own[previous.foldedThrough - 1]))
-    if (resumable && previous.delivered) return true
-    let delivered = resumable ? previous.delivered : false
-    if (!resumable || previous.foldedThrough < own.length) {
-      for (let index = resumable ? previous.foldedThrough : 0; index < own.length; index += 1) {
-        if (noticeInEvent(this.host.pluginId, own[index]!)) delivered = true
-      }
+    let delivered = false
+    for (const event of own) {
+      // A replacement invalidates every notice before it: they were sent into a
+      // context that no longer exists.
+      if (CONTENT_REPLACED.has(event.type)) delivered = false
+      else if (noticeInEvent(this.host.pluginId, event)) delivered = true
     }
-    const last = own[own.length - 1]
-    this.noticeSeen.set(subject, {
-      sessionId: span.sessionId,
-      foldedThrough: own.length,
-      anchor: last === undefined ? undefined : { seq: Number(last.seq), type: last.type },
-      delivered,
-    })
     return delivered
   }
 

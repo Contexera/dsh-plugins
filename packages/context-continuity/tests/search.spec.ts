@@ -376,7 +376,7 @@ function adapterFor(query: ContextSearchPort, overrides: Partial<ContextSearchAd
     config,
     measureSource: (source) => {
       measured.push(String(source.sessionId))
-      return 100
+      return { totalTokens: 100, nodes: [{ seq: SessionSeq(0), tokens: 100 }] }
     },
     handoffAt: () => 100_000,
     ...overrides,
@@ -788,7 +788,7 @@ describe('the return anchor: the timeline policy, asked about one hit', () => {
       current: sourceOf(PARENT, PARENT_EVENTS, GRANDPARENT, GRANDPARENT_EVENTS.length),
       config,
       readAncestor: () => { throw new Error('the spec must not walk ancestors') },
-      measureSource: () => 100,
+      measureSource: () => ({ totalTokens: 100, nodes: [{ seq: SessionSeq(0), tokens: 100 }] }),
       currentUsageTokens: 100,
       handoffAt: 100_000,
       maxAncestors: 0,

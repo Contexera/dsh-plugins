@@ -45,9 +45,11 @@ subject is, what events are worth returning to (`domainBoundaryOf`), what a
 "first arrival" means (`seenTopics`), what a topic is (`attributions`).
 
 This is why domain anchors are a fold *contribution*, not a configurable
-labeller: rules like "a boundary is a default return anchor exactly when it is
-attributable to one topic" need to read event semantics, and only the host has
-them.
+labeller: rules like "a boundary is a default return anchor exactly when its
+retained prefix carries one topic" need to read event semantics, and only the
+host has them. The same split is why a host may name boundary kinds that are not
+return targets at all (`boundaryRestorableFor`): the engine applies the shared
+rules and asks the host for its own, once, for both readers.
 
 ## P3 — Durable identity and authorization belong to the host
 
@@ -119,7 +121,7 @@ prevent — a subject that runs out of context in the middle of its work — is 
 one the subject cannot ask about in time, so the engine reads the subject's own
 budget and surface and acts on them.
 
-What it may do is engine-owned: one notice per generation at the handoff budget,
+What it may do is engine-owned: one notice per context at the handoff budget,
 a *proven* reduction or a refusal at the hard limit, and — only when a host
 supplies both a relatedness view and a judge — holding one step after a long gap,
 so the work continues in a fresh generation instead of paying for a stale context

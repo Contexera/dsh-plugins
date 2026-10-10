@@ -120,6 +120,14 @@ const projectionHost: ContextProjectionHost = {
   },
 
   isEphemeralNotice: (message) => /* your domain's transient notices */ false,
+
+  // Optional: why one of YOUR boundary kinds may not be entered again. The
+  // engine's shared rules cover everything else. Both surfaces that offer a
+  // return anchor ask it — the timeline read and the rollover guard — so a ref
+  // the timeline offers is a ref `context_rollover` accepts.
+  boundaryRestorableFor: (candidate) => candidate.kind === 'team_handoff'
+    ? 'a handoff closes a context; unwinding into it is not a proven-safe target'
+    : undefined,
 }
 ```
 
@@ -153,10 +161,17 @@ may return the framework's folded state, or fold by hand with
 Both converge on one value (cold == live).
 
 **Anchor policy the engine owns:** a boundary is a selectable default return
-anchor exactly when it resolved at a completed turn and is attributable to
-exactly one topic. What a *topic* is (`attributions`) is your call — a Thread,
-a continuity line, a repo. Multi-topic or mid-turn boundaries are searchable
-evidence but not default return targets.
+anchor exactly when it resolved at a completed turn and the topics its retained
+prefix carries are exactly one — a return keeps that prefix, so an earlier
+boundary's topics count even when this one arrived with only its own. What a
+*topic* is (`attributions`) is your call — a Thread, a continuity line, a repo.
+Multi-topic or mid-turn boundaries are searchable evidence but not default
+return targets.
+
+The one rule the engine cannot state is which of *your* boundary kinds closed a
+context rather than opened a topic: implement `host.boundaryRestorableFor` and
+both surfaces — the timeline read and the rollover guard — ask it, so a ref the
+timeline offers is a ref `context_rollover` accepts.
 
 ## Seam 4 — coordinator (shipped)
 
@@ -236,8 +251,8 @@ const timeline = await readContextTimeline({
   config,                                        // the same fold config as seam 3
   readAncestor: id => sessionReader.read(id),    // your StoredSessionReader
   measureSource: source => source.sessionId === agent.session.id
-    ? meter?.measure(agent.session)?.totalTokens
-    : measureStoredLog(source),                  // your own replay of the ancestor
+    ? meter?.measure(agent.session)                  // the meter's own shape
+    : measureStoredLog(source),                      // your own replay of the ancestor
   currentUsageTokens: meter?.measure(agent.session)?.totalTokens ?? 0,
   handoffAt,                                     // from your route limits
   hardLimit,                                     // optional: echoed back for display only
@@ -246,16 +261,20 @@ const timeline = await readContextTimeline({
 
 - **The engine prices; you measure.** A pure library has no `tokenMeter` on
   `ctx`, so measurement arrives as `measureSource` — the *source's own* replayed
-  token count, so a small current generation never shrinks a large ancestor's
-  real seed cost. `undefined` means unmeasurable: those anchors stay listed with
-  a reason instead of being priced as free.
+  measurement, node by node, so an anchor prices at the tokens its seed prefix
+  really keeps and a small current generation never shrinks a large ancestor's
+  real seed cost. `undefined` (or a measurement with no nodes) means
+  unmeasurable: those anchors stay listed with a reason instead of being priced
+  as free.
 - **Anchors are structural.** Resolved checkpoints, resolved host boundaries
   (your `domainBoundaryOf` contributions), and the current head. An unresolved
   anchor is not a candidate, and an archived generation contributes no head.
 - **The restorable rule is the one `context_rollover` uses:** a boundary is
-  selectable exactly when it resolved at a completed turn and is attributable to
-  exactly one topic; a checkpoint while its retained context stays below
-  `handoffAt`. Every non-restorable anchor carries its reason, and quotes its
+  selectable exactly when it resolved at a completed turn and exactly one topic's
+  facts are in the prefix a return would keep; a checkpoint while its retained
+  context stays below `handoffAt`. Seed that rule with your own
+  `boundaryRestorableFor` for the boundary kinds only you can judge, and both
+  this list and the rollover guard answer from the same rule. Every non-restorable anchor carries its reason, and quotes its
   own identifier marked not selectable — a reader has to be able to name the row
   it is being told it cannot return to.
 - **An unreadable ancestor ends the walk and is reported** in `incompleteFrom`:
@@ -451,7 +470,7 @@ const tools = createSearchTools({
   },
   query: ctx.sessionQuery,                       // the Harness capability, unchanged
   config,                                        // the same fold config as seams 3 and 5
-  measureSource: (source, exec) => measuredTokensOf(source),
+  measureSource: (source, exec) => measurementOf(source),   // { totalTokens, nodes }
   handoffAt: exec => handoffBudgetOf(exec),
 })
 // register tools.search / tools.read
@@ -521,7 +540,7 @@ const tools = createSearchTools({
 
 `ContextPressurePolicy` decides when a subject is told to prepare a handoff, and
 what happens when it is at its limit. The engine owns the decision order, the
-once-per-generation latch, and the proof a reduction has to earn; you own the
+once-per-context latch, and the proof a reduction has to earn; you own the
 meter, the reduction capability, the steer, and what the notice calls whatever
 the subject is holding.
 
@@ -561,6 +580,13 @@ const decision = await pressure.onPreStep(member, signal)   // continue | notice
   notice you do not record in the log is delivered again — the latch reads the
   log, not your memory. An inherited notice belongs to the generation it came
   from and does not latch this one.
+- **A compaction re-arms the notice.** Compaction is that notice's own default
+  action and leaves the subject in this Session, so a `compaction/end` starts a
+  fresh context for the latch: every notice before it was sent into a context
+  that no longer exists, and pressure climbing back over the budget in a context
+  nobody has warned about is exactly what the notice is for. A notice written
+  after it latches again, so re-arming means one notice per context rather than
+  one per pre-step.
 - **A reduction must be proven.** The engine reads `surfaceFor` before and after
   and continues only when the durable generation advanced or pressure measurably
   fell (`tokens`, when you meter); otherwise the step is refused with a
@@ -589,6 +615,10 @@ const decision = await pressure.onPreStep(member, signal)   // continue | notice
 A subject that comes back to a large context after a long absence is usually
 starting new work, and the old context is dead weight it pays for on every step.
 The gate asks a judge once whether the arriving input continues the recent work.
+The absence is read from the durable log — the newest `turn/end` is when the
+generation last stopped working, and the arriving turn's own `turn/start` is
+already in that log before this policy runs, so it cannot stand in for the gap.
+A span with no completed turn has no measurable gap, and the gate stays off.
 An unrelated answer holds the step and steers one instruction to roll over, so
 the work continues in a fresh generation seeded by a handoff written for that
 input. Two optional host members switch the gate on; omit either and the gate
@@ -774,4 +804,4 @@ Once a host ships, treat them as frozen:
    rejects as a model-visible error instead of decoding into the wrong event.
 7. The pressure notice's `source.summary` (`PRESSURE_NOTICE_SUMMARY`) — the
    latch reads notices back out of live logs to decide whether the current
-   generation was already told, so a notice already written must keep matching.
+   context was already told, so a notice already written must keep matching.

@@ -113,6 +113,14 @@ export type {
   ContinuitySummaryResult,
 } from './compaction-engine.ts'
 
+/**
+ * The return-anchor policy, exported so a host can ask the same question both
+ * of its own surfaces do: the timeline read offers a ref, and a rollover guard
+ * executed later against mutable state has to answer identically.
+ */
+export { anchorCandidates, anchorRejection, retainedPrice } from './anchor.ts'
+export type { AnchorCandidate, AnchorSourceKind } from './anchor.ts'
+
 export {
   CONTEXT_SEARCH_RESULT_LIMIT,
   CONTEXT_READ_BEFORE,
