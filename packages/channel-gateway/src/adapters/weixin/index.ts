@@ -409,11 +409,20 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
         await delay(retryDelayMs, signal)
         continue
       }
-      if (typeof page.get_updates_buf === 'string' && page.get_updates_buf !== '') cursor = page.get_updates_buf
+      const nextCursor = typeof page.get_updates_buf === 'string' && page.get_updates_buf !== ''
+        ? page.get_updates_buf
+        : cursor
       if (typeof page.longpolling_timeout_ms === 'number' && page.longpolling_timeout_ms > 0) {
         // Ask for a little longer than the server said it would hold the call.
         requestTimeoutMs = page.longpolling_timeout_ms + 5000
       }
+      // This page's deliveries settle before the next `get_updates_buf` is
+      // committed. The cursor is the provider's position, and iLink does not
+      // replay what it has already handed over — so a page that was not accepted
+      // keeps its cursor and is requested again, which is why a sink must be
+      // idempotent. The tokens a page carried are still remembered: they are
+      // what a later reply to that user would quote.
+      let failed = false
       for (const message of page.msgs ?? []) {
         const normalized = normalize(message)
         if (normalized === undefined) continue
@@ -422,8 +431,20 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
         const fromUser = message.from_user_id ?? ''
         const token = message.context_token ?? ''
         if (fromUser !== '' && token !== '') contextTokens.set(fromUser, { token, at: Date.now() })
-        inbox.deliver(normalized)
+        try {
+          await inbox.deliver(normalized)
+        } catch (error: unknown) {
+          if (!running || signal.aborted) return
+          log.error(`weixin: delivery failed, holding the cursor so the page is requested again: ${errorText(error)}`)
+          failed = true
+          break
+        }
       }
+      if (failed) {
+        await delay(retryDelayMs, signal)
+        continue
+      }
+      cursor = nextCursor
     }
   }
 

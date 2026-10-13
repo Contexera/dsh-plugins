@@ -55,13 +55,17 @@ would make "was this accepted" ambiguous; registering another throws
    decision about it and re-reading it would only be refused again.
 3. With a sink, the gateway awaits `accept` and announces only after it
    resolved — a listener never sees a message that is not durable yet.
-4. When the sink rejects, `deliver` rejects too — which is how an adapter learns
-   the message must not be treated as delivered. A rejection is a transient
-   failure to accept; a refusal is not.
+4. When the sink rejects, `deliver` rejects too. The adapter then leaves its
+   provider cursor or offset where it was, so the provider hands the message over
+   again. A rejection is a transient failure to accept; a refusal is not.
 5. The sink owns `(channel, providerMessageId)` deduplication. The gateway keeps
    no business dedupe state, so **a sink must be idempotent**: when one message on
    a page fails, an adapter may hand the whole page over again.
 
+Both adapters follow the same rule: a page's deliveries settle before the cursor
+moves. For Telegram that is the `getUpdates` offset; for weixin it is the
+`get_updates_buf` cursor. The cursor stays inside the adapter and never enters
+the gateway's public contract.
 
 ## The message contract
 

@@ -11,8 +11,9 @@ message contract and the seam between a provider and a consumer. What a message
 means, whether it was seen before, and where it goes next are decided above it.
 
 An event alone cannot promise that a consumer stored anything, so a consumer that
-needs durable intake registers an inbound sink, and the gateway awaits it before
-announcing. Without a sink the event is best-effort notification.
+needs durable intake registers an inbound sink and the adapters then advance their
+provider cursor only after that sink accepted the message. Without a sink the
+event is best-effort notification.
 
 ## Contract
 

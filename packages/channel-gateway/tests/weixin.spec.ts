@@ -69,6 +69,36 @@ function pollOnce(page: unknown, ...rest: readonly Responder[]): Responder {
   }
 }
 
+/**
+ * An iLink that re-serves one page while the cursor it is handed is still behind
+ * it, so a test can see whether a delivery that failed was requested again or
+ * silently skipped. Once the cursor reaches `settledCursor` it waits for stop,
+ * and after `resends` re-servings it waits too — a test that keeps failing a
+ * delivery must not spin the loop at full speed while it asserts.
+ */
+function resendingWeixin(
+  page: Readonly<Record<string, unknown>>,
+  settledCursor: string,
+  ...rest: readonly Responder[]
+): Responder {
+  let resends = 0
+  return (endpoint, body, signal) => {
+    if (endpoint !== 'getupdates') {
+      const other = rest[0]
+      if (other === undefined) throw new Error(`unexpected ${endpoint}`)
+      return other(endpoint, body, signal)
+    }
+    const settled = body['get_updates_buf'] === settledCursor || resends >= 8
+    resends += 1
+    if (settled) {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+      })
+    }
+    return page
+  }
+}
+
 const textMessage = {
   message_id: 501,
   from_user_id: 'wxid_peer',
@@ -353,6 +383,129 @@ describe('weixin channel', () => {
     const item = sendBody?.msg?.item_list?.[0]
     expect(item?.type).toBe(2)
     expect(item?.image_item?.media?.encrypt_query_param).toBe('DL-PARAM')
+  })
+})
+
+/**
+ * The cursor is the provider position: iLink does not replay what it has already
+ * handed over, so a page that was not accepted must keep its cursor and be
+ * requested again.
+ */
+describe('weixin delivery durability', () => {
+  it('commits the cursor only after the page was accepted', async () => {
+    const { impl, calls } = fakeWeixin(pollOnce({ get_updates_buf: 'cursor-1', msgs: [textMessage] }))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
+    const seen: InboundMessage[] = []
+
+    await channel.start({ deliver: async message => { seen.push(message) } })
+    await waitFor(() => calls.filter(call => call.endpoint === 'getupdates').length >= 2)
+    await channel.stop()
+
+    expect(calls[1]?.body.get_updates_buf).toBe('cursor-1')
+  })
+
+  it('holds the cursor on a rejected delivery, then commits it once accepted', async () => {
+    const { impl, calls } = fakeWeixin(resendingWeixin({ get_updates_buf: 'cursor-1', msgs: [textMessage] }, 'cursor-1'))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
+    const attempts: string[] = []
+    let failNext = true
+
+    await channel.start({
+      deliver: async message => {
+        attempts.push(message.providerMessageId)
+        if (failNext) {
+          failNext = false
+          throw new Error('the store is full')
+        }
+      },
+    })
+    // Accepted on the second handing-over, so the cursor may now move.
+    await waitFor(() => attempts.length >= 2)
+    await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-1'))
+    await channel.stop()
+
+    // The message was requested again rather than skipped: never a gap.
+    expect(attempts).toEqual(['501', '501'])
+  })
+
+  it('holds the cursor when a later message on the page is the one that fails', async () => {
+    const page = {
+      get_updates_buf: 'cursor-2',
+      msgs: [textMessage, { ...textMessage, message_id: 502, item_list: [{ type: 1, text_item: { text: 'second' } }] }],
+    }
+    const { impl, calls } = fakeWeixin(resendingWeixin(page, 'cursor-2'))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 5 })
+    const attempts: string[] = []
+    let refusals = 1
+
+    await channel.start({
+      deliver: async message => {
+        attempts.push(message.providerMessageId)
+        if (message.providerMessageId === '502' && refusals > 0) {
+          refusals -= 1
+          throw new Error('the store is full')
+        }
+      },
+    })
+    // The page is accepted on its second handing-over, so the cursor commits.
+    await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-2'), 1000)
+    await channel.stop()
+
+    // The first message is re-delivered even though it was accepted the first
+    // time — a sink is expected to be idempotent — and nothing was skipped.
+    expect(attempts.slice(0, 4)).toEqual(['501', '502', '501', '502'])
+  })
+
+  it('does not commit the cursor while a message on the page keeps failing', async () => {
+    const page = { get_updates_buf: 'cursor-9', msgs: [textMessage] }
+    const { impl, calls } = fakeWeixin(resendingWeixin(page, 'cursor-9'))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 5 })
+    let attempts = 0
+
+    await channel.start({
+      deliver: async () => {
+        attempts += 1
+        throw new Error('the store is full')
+      },
+    })
+    await waitFor(() => attempts >= 3, 1000)
+    await channel.stop()
+
+    // The cursor never moved, so every request asked for the same page again: a
+    // provider that is not re-asked cannot hand the message over a second time.
+    const polls = calls.filter(call => call.endpoint === 'getupdates')
+    expect(polls.length).toBeGreaterThanOrEqual(3)
+    expect(polls.every(call => call.body.get_updates_buf !== 'cursor-9')).toBe(true)
+  })
+
+  it('keeps a page\'s tokens usable even when that page was not accepted', async () => {
+    const page = { get_updates_buf: 'cursor-3', msgs: [textMessage] }
+    const userId = Buffer.from('wxid_peer', 'utf8').toString('base64url')
+    const routeToken = Buffer.from('a-stale-route-token', 'utf8').toString('base64url')
+    // Any getconfig call would mean the cached token was not used.
+    const { impl, calls } = fakeWeixin(resendingWeixin(page, 'cursor-3', (endpoint) => {
+      if (endpoint === 'getconfig') throw new Error('the cached token should have been used')
+      return {}
+    }))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
+    let attempts = 0
+
+    await channel.start({
+      deliver: async () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('the store is full')
+      },
+    })
+    // Accepted on the second handing-over, so the cursor commits and polling settles.
+    await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-3'), 1000)
+    await channel.stop()
+
+    // The delivery failed, but the token that came with the page is the freshest
+    // one for that user, so a reply can still be addressed without a refresh.
+    await channel.send({ channel: 'weixin', route: `wx:${userId}.${routeToken}`, text: 'hi' })
+
+    const send = calls.find(call => call.endpoint === 'sendmessage')
+    expect((send?.body.msg as { context_token?: string }).context_token).toBe('ctx-token')
   })
 })
 

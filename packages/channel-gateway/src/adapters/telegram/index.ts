@@ -405,15 +405,37 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
         await delay(retryDelayMs, signal)
         continue
       }
+      // A page's deliveries settle before the offset moves. The offset is the
+      // provider's cursor, and Telegram never re-sends an update the offset has
+      // passed — so advancing past one that was not accepted would lose it. A
+      // rejected delivery therefore leaves the offset alone and backs off, and
+      // the whole page arrives again, which is why a sink must be idempotent.
+      let failed = false
       for (const update of updates) {
-        // Advance past every update the provider handed over, whether or not it
-        // carried a message this adapter can normalize: re-reading it forever
-        // would block everything behind it.
-        offset = update.update_id + 1
         const message = update.message
         if (message === undefined) continue
         const normalized = normalize(message)
-        if (normalized !== undefined) inbox.deliver(normalized)
+        if (normalized === undefined) continue
+        try {
+          await inbox.deliver(normalized)
+        } catch (error: unknown) {
+          if (!running || signal.aborted) return
+          log.error(`telegram: delivery failed, holding the offset so the page is resent: ${errorText(error)}`)
+          failed = true
+          break
+        }
+      }
+      if (failed) {
+        await delay(retryDelayMs, signal)
+        continue
+      }
+      // Advance past every update the provider handed over, whether or not it
+      // carried a message this adapter can normalize: re-reading it forever
+      // would block everything behind it. The offset only ever moves forward —
+      // moving it back would ask the provider to re-send what it already sent.
+      for (const update of updates) {
+        const candidate = update.update_id + 1
+        if (offset === undefined || candidate > offset) offset = candidate
       }
     }
   }

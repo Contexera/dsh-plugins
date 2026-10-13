@@ -64,6 +64,32 @@ function pollOnce(updates: readonly unknown[], botIdentity: Responder): Responde
   }
 }
 
+/**
+ * A Bot API that keeps re-serving `updates` until the offset it is given has
+ * passed them, the way the real one re-sends everything at or after that offset.
+ * A test can therefore see whether a delivery that failed was re-handed-over or
+ * silently skipped. After `resends` re-servings it waits for stop, so a test that
+ * keeps failing a delivery does not spin the loop at full speed while it asserts.
+ */
+function resendingTelegram(updates: readonly Record<string, unknown>[], botIdentity: Responder): Responder {
+  let resends = 0
+  return (method, body, signal) => {
+    if (method !== 'getUpdates') return botIdentity(method, body, signal)
+    const offset = body?.['offset']
+    const remaining = typeof offset === 'number'
+      ? updates.filter(update => Number(update['update_id']) >= offset)
+      : updates
+    const done = remaining.length === 0 || resends >= 8
+    resends += 1
+    if (done) {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+      })
+    }
+    return remaining
+  }
+}
+
 const privateMessage = {
   update_id: 10,
   message: {
@@ -485,6 +511,92 @@ describe('telegram channel', () => {
     expect(String(failure)).toContain('attachment 1 of 1')
     // A rejection the provider means is not retried, so the text went out once.
     expect(calls).toEqual(['sendMessage', 'sendDocument'])
+  })
+})
+
+/**
+ * The offset is the provider cursor: Telegram never re-sends an update the
+ * offset has passed, so a delivery that was not accepted must leave the offset
+ * alone and let the provider hand the page over again.
+ */
+describe('telegram delivery durability', () => {
+  it('advances the offset only after the page was accepted', async () => {
+    const { impl, calls } = fakeTelegram(pollOnce([privateMessage], () => ({ id: 1, username: 'the-bot' })))
+    const channel = createTelegramChannel({ token: 'T', fetch: impl, retryDelayMs: 1 })
+    const seen: InboundMessage[] = []
+
+    await channel.start({ deliver: async message => { seen.push(message) } })
+    await waitFor(() => seen.length > 0)
+    await channel.stop()
+
+    const polls = calls.filter(call => call.method === 'getUpdates')
+    expect(polls[1]?.body).toMatchObject({ offset: 11 })
+  })
+
+  it('holds the offset on a rejected delivery, then advances once it is accepted', async () => {
+    const { impl, calls } = fakeTelegram(resendingTelegram([privateMessage], () => ({ id: 1, username: 'the-bot' })))
+    const channel = createTelegramChannel({ token: 'T', fetch: impl, retryDelayMs: 1 })
+    const attempts: string[] = []
+    let failNext = true
+
+    await channel.start({
+      deliver: async message => {
+        attempts.push(message.providerMessageId)
+        if (failNext) {
+          failNext = false
+          throw new Error('the store is full')
+        }
+      },
+    })
+    // The page came back and was accepted the second time, so the offset may move.
+    await waitFor(() => attempts.length >= 2)
+    await waitFor(() => calls.filter(call => call.method === 'getUpdates' && call.body?.['offset'] !== undefined).length > 0, 1000)
+    await channel.stop()
+
+    // The message was handed over again rather than skipped: never a gap.
+    expect(attempts).toEqual(['5', '5'])
+    expect(calls.filter(call => call.method === 'getUpdates')[1]?.body).not.toMatchObject({ offset: 11 })
+  })
+
+  it('holds the offset when a later message on the page is the one that fails', async () => {
+    const second = {
+      update_id: 12,
+      message: { ...privateMessage.message, message_id: 6, text: 'and this one' },
+    }
+    const { impl, calls } = fakeTelegram(resendingTelegram([privateMessage, second], () => ({ id: 1, username: 'b' })))
+    const channel = createTelegramChannel({ token: 'T', fetch: impl, retryDelayMs: 1 })
+    const attempts: string[] = []
+
+    await channel.start({
+      deliver: async message => {
+        attempts.push(message.providerMessageId)
+        if (message.providerMessageId === '6') throw new Error('the store is full')
+      },
+    })
+    await waitFor(() => attempts.length >= 3, 1000)
+    await channel.stop()
+
+    // The first message is re-delivered even though it was accepted the first
+    // time — the sink is expected to be idempotent — and neither is skipped.
+    expect(attempts.slice(0, 3)).toEqual(['5', '6', '5'])
+    const offsets = calls.filter(call => call.method === 'getUpdates').map(call => call.body?.['offset'])
+    expect(offsets).not.toContain(13)
+  })
+
+  it('keeps the offset for an unnormalizable update but does not hold the page for it', async () => {
+    const unnormalizable = { update_id: 20, edited_message: { message_id: 1 } }
+    const { impl, calls } = fakeTelegram(pollOnce([unnormalizable, privateMessage], () => ({ id: 1, username: 'b' })))
+    const channel = createTelegramChannel({ token: 'T', fetch: impl, retryDelayMs: 1 })
+    const seen: InboundMessage[] = []
+
+    await channel.start({ deliver: async message => { seen.push(message) } })
+    await waitFor(() => seen.length > 0)
+    await waitFor(() => calls.filter(call => call.method === 'getUpdates').length >= 2)
+    await channel.stop()
+
+    // Re-reading an update this adapter cannot normalize forever would block
+    // everything behind it, so the offset still moves past it.
+    expect(calls.filter(call => call.method === 'getUpdates')[1]?.body).toMatchObject({ offset: 21 })
   })
 })
 
