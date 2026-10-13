@@ -84,7 +84,7 @@ describe('weixin channel', () => {
     const { impl, calls } = fakeWeixin(pollOnce({ get_updates_buf: 'cursor-1', msgs: [textMessage] }))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -107,7 +107,7 @@ describe('weixin channel', () => {
   it('sends the cursor the server handed back on the next poll', async () => {
     const { impl, calls } = fakeWeixin(pollOnce({ get_updates_buf: 'cursor-7', msgs: [] }))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
-    await channel.start({ deliver: () => {} })
+    await channel.start({ deliver: async () => {} })
     await waitFor(() => calls.filter(call => call.endpoint === 'getupdates').length >= 2)
     await channel.stop()
 
@@ -126,7 +126,7 @@ describe('weixin channel', () => {
     const { impl } = fakeWeixin(pollOnce(page))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -149,7 +149,7 @@ describe('weixin channel', () => {
     const { impl } = fakeWeixin(pollOnce(page))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -167,7 +167,7 @@ describe('weixin channel', () => {
   it('stops polling when the token is stale instead of retrying forever', async () => {
     const { impl, calls } = fakeWeixin(pollOnce({ errcode: -14, errmsg: 'token expired' }))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
-    await channel.start({ deliver: () => {} })
+    await channel.start({ deliver: async () => {} })
     await waitFor(() => calls.length >= 1)
     await new Promise(resolve => { setTimeout(resolve, 20) })
 
@@ -182,7 +182,7 @@ describe('weixin channel', () => {
     ))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    const inbox: ChannelInbox = { deliver: message => { seen.push(message) } }
+    const inbox: ChannelInbox = { deliver: async message => { seen.push(message) } }
     await channel.start(inbox)
     await waitFor(() => seen.length > 0)
 
@@ -213,7 +213,7 @@ describe('weixin channel', () => {
     ))
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
 
     await channel.send({
@@ -311,7 +311,7 @@ describe('weixin channel', () => {
     }) as unknown as typeof fetch
     const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1, attachmentHosts: ['cdn.test'] })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -390,7 +390,7 @@ describe('weixin attachment refs are authenticated before any network access', (
       ...(options.maxAttachmentBytes === undefined ? {} : { maxAttachmentBytes: options.maxAttachmentBytes }),
     })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
     return { channel, fetched, attachment: seen[0]?.attachments?.[0] }

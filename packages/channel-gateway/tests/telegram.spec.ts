@@ -84,7 +84,7 @@ describe('telegram channel', () => {
     const { impl, calls } = fakeTelegram(respond)
     const channel = createTelegramChannel({ token: 'TESTTOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    const inbox: ChannelInbox = { deliver: message => { seen.push(message) } }
+    const inbox: ChannelInbox = { deliver: async message => { seen.push(message) } }
 
     await channel.start(inbox)
     await waitFor(() => seen.length > 0)
@@ -122,7 +122,7 @@ describe('telegram channel', () => {
     const { impl } = fakeTelegram(pollOnce([group], () => ({ id: 1, username: 'the-bot' })))
     const channel = createTelegramChannel({ token: 'TESTTOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -147,7 +147,7 @@ describe('telegram channel', () => {
     const { impl, calls } = fakeTelegram(pollOnce(updates, () => ({ id: 1, username: 'the-bot' })))
     const channel = createTelegramChannel({ token: 'TESTTOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -259,7 +259,7 @@ describe('telegram channel', () => {
 
     // A transport failure is transient: start retries rather than rejecting, and
     // the retry it logs must never quote the token back.
-    void channel.start({ deliver: () => {} })
+    void channel.start({ deliver: async () => {} })
     await waitFor(() => logged.some(message => /getMe failed/.test(message)))
     await channel.stop()
 
@@ -293,7 +293,7 @@ describe('telegram channel', () => {
     const channel = createTelegramChannel({ token: 'TESTTOKEN', fetch: impl, retryDelayMs: 1 })
     const seen: InboundMessage[] = []
 
-    await channel.start({ deliver: message => { seen.push(message) } })
+    await channel.start({ deliver: async message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
@@ -311,7 +311,7 @@ describe('telegram channel', () => {
     const channel = createTelegramChannel({ token: 'BAD', fetch: impl, retryDelayMs: 1 })
 
     // A 4xx rejection is not transient: the start fails once, it does not spin.
-    await expect(channel.start({ deliver: () => {} })).rejects.toThrow(/Unauthorized/)
+    await expect(channel.start({ deliver: async () => {} })).rejects.toThrow(/Unauthorized/)
     expect(getMeCalls).toBe(1)
   })
 
@@ -362,7 +362,7 @@ describe('telegram channel', () => {
     }) as unknown as typeof fetch
     const channel = createTelegramChannel({ token: 'T', fetch: impl, pollWatchdogMs: 20, pollingTimeoutSec: 0 })
 
-    await channel.start({ deliver: () => {} })
+    await channel.start({ deliver: async () => {} })
     await waitFor(() => polls >= 2, 1000)
     await channel.stop()
     expect(polls).toBeGreaterThanOrEqual(2)

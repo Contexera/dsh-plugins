@@ -10,14 +10,58 @@ guarantees, and where the boundary sits.
 1. **Normalize.** Every adapter turns its provider's payload into one
    `InboundMessage` shape, and one `OutboundMessage` shape back.
 2. **Dispatch.** An authorized inbound message is announced once, as the typed
-   event `channel/inbound`.
+   event `channel/inbound`, and handed to the registered inbound sink when there
+   is one.
 3. **Authorize.** A pluggable policy answers "may this actor speak here?" before
-   anything is announced.
+   anything is announced or accepted.
 
-Deduplication, durable acceptance, actor identity beyond the provider's id,
-session routing, reply policy and visibility rules are implemented by a
-consumer. The contract carries the provider's message id and an opaque route so
-that a consumer can implement them without the gateway having to.
+Deduplication, actor identity beyond the provider's id, session routing, reply
+policy and visibility rules are implemented by a consumer. The contract carries
+the provider's message id and an opaque route so that a consumer can implement
+them without the gateway having to.
+
+## Delivery semantics
+
+Three words, used precisely:
+
+- **Announced** — the gateway broadcast the message as `channel/inbound`. It is
+  synchronous, so listener promises are never awaited. This is all a gateway
+  with no sink promises.
+- **Accepted** — the registered {@link ChannelInboundSink} resolved
+  `accept(message)`, meaning a consumer has persisted or durably enqueued it.
+- **Delivered** — the adapter's `inbox.deliver(message)` promise settled. It
+  settles after authorization, after acceptance when a sink is registered, and
+  after the announcement.
+
+Without a sink the gateway offers **best-effort notification**: a message can be
+announced and then lost if the process stops before a consumer has stored it. The
+gateway does not promise exactly-once, does not promise durable acceptance, and
+does not promise a message is not handed over twice. A consumer that needs those
+registers a sink through `ctx.channels.registerInboundSink(sink)`:
+
+```ts
+const stop = ctx.channels.registerInboundSink({
+  async accept(message) { await store.append(message) },
+})
+```
+
+One sink at a time — acceptance is a durable commitment, and a second consumer
+would make "was this accepted" ambiguous; registering another throws
+`ChannelGatewayError`. Rules:
+
+1. At most one sink; the returned function unregisters it.
+2. The gateway checks channel ownership, then authorizes. A message that fails
+   either is dropped: `deliver` **resolves**, because refusing a message is a
+   decision about it and re-reading it would only be refused again.
+3. With a sink, the gateway awaits `accept` and announces only after it
+   resolved — a listener never sees a message that is not durable yet.
+4. When the sink rejects, `deliver` rejects too — which is how an adapter learns
+   the message must not be treated as delivered. A rejection is a transient
+   failure to accept; a refusal is not.
+5. The sink owns `(channel, providerMessageId)` deduplication. The gateway keeps
+   no business dedupe state, so **a sink must be idempotent**: when one message on
+   a page fails, an adapter may hand the whole page over again.
+
 
 ## The message contract
 
@@ -117,8 +161,12 @@ written out explicitly, and an empty list admits nobody.
 
 `channel/inbound(message)` is declared on Cordis's `Events` interface, so
 `ctx.emit` and `ctx.on` are fully typed. It is synchronous broadcast: listener
-return values and promises are not awaited. A listener that needs durable work
-owns that work — the acceptance step a consumer is expected to implement.
+return values and promises are not awaited.
+
+That makes it a **notification contract, not a delivery guarantee** — this event
+tells a listener that a message was authorized, not that anyone stored it. A
+consumer that needs durable acceptance registers an inbound sink instead; see
+[Delivery semantics](#delivery-semantics).
 
 ## Errors
 

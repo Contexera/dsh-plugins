@@ -13,6 +13,7 @@ import { allowlistAuth, type ChannelAuth } from './auth.ts'
 import type {
   Channel,
   ChannelAttachment,
+  ChannelInboundSink,
   ChannelInbox,
   ChannelSendResult,
   InboundMessage,
@@ -31,6 +32,11 @@ declare module '@deepseek-ai/cordis' {
      * One authorized inbound message, normalized. Synchronous broadcast:
      * a listener's returned promise is not awaited, so a listener that needs
      * durable work owns that work itself.
+     *
+     * That makes this a notification contract, not a delivery guarantee. A
+     * consumer that needs durable acceptance registers a sink through
+     * {@link ChannelGateway.registerInboundSink}; this event is then announced
+     * only after the sink accepted the message.
      */
     'channel/inbound'(message: InboundMessage): void
   }
@@ -45,10 +51,34 @@ export interface ChannelGatewayConfig {
 export class ChannelGateway extends Service {
   private readonly registered = new Map<string, Channel>()
   private readonly auth: ChannelAuth
+  /** The one durable acceptance seam, or none while the gateway only announces. */
+  private sink: ChannelInboundSink | undefined
 
   constructor(ctx: Context, config: ChannelGatewayConfig = {}) {
     super(ctx, 'channels')
     this.auth = config.auth ?? allowlistAuth([])
+  }
+
+  /**
+   * Register the reliable acceptance seam, and return the function that removes
+   * it. At most one sink exists at a time: acceptance is a durable commitment,
+   * and a second consumer would make "was this message accepted" ambiguous.
+   *
+   * While a sink is registered, {@link ChannelGateway} awaits
+   * `sink.accept(message)` before announcing `channel/inbound`, and a rejection
+   * fails the delivering adapter's `deliver` call so it can leave its provider
+   * cursor alone and let the provider hand the message over again. The sink is
+   * responsible for `(channel, providerMessageId)` deduplication; the gateway
+   * stores no business dedupe state.
+   */
+  registerInboundSink(sink: ChannelInboundSink): () => void {
+    if (this.sink !== undefined) {
+      throw new ChannelGatewayError('a reliable inbound sink is already registered; unregister it before adding another')
+    }
+    this.sink = sink
+    return () => {
+      if (this.sink === sink) this.sink = undefined
+    }
   }
 
   /** Every channel registered right now, in registration order. */
@@ -73,7 +103,7 @@ export class ChannelGateway extends Service {
     this.registered.set(channel.name, channel)
 
     const inbox: ChannelInbox = {
-      deliver: (message) => { void this.accept(channel.name, message) },
+      deliver: async (message) => { await this.accept(channel.name, message) },
     }
     let live = true
     void channel.start(inbox).catch((error: unknown) => {
@@ -122,9 +152,15 @@ export class ChannelGateway extends Service {
 
   /**
    * Take one message a channel reported: prove it belongs to that channel,
-   * authorize it, then announce it. A message that fails either step is
-   * dropped here, where the gateway can still see why — a channel never
-   * decides who may speak.
+   * authorize it, then hand it to the sink when one is registered and announce
+   * it. A message that fails ownership or authorization is dropped here, where
+   * the gateway can still see why — a channel never decides who may speak.
+   *
+   * Dropping a message resolves: refusing it is a decision about that message,
+   * and an adapter that re-read it would only be refused again. A sink
+   * rejection is the opposite — a transient failure to accept — so it
+   * propagates to the adapter, which must then leave its provider cursor where
+   * it was and let the provider hand the message over again.
    */
   private async accept(owner: string, message: InboundMessage): Promise<void> {
     if (message.channel !== owner) {
@@ -147,6 +183,10 @@ export class ChannelGateway extends Service {
       this.report('info', `channel "${owner}" dropped a message from actor "${message.actor.id}": not authorized`)
       return
     }
+    // Acceptance precedes the announcement, so a listener never sees a message
+    // that is not durable yet.
+    const sink = this.sink
+    if (sink !== undefined) await sink.accept(message)
     this.ctx.emit('channel/inbound', message)
   }
 

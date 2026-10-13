@@ -3,10 +3,10 @@
  *
  * This is a public API other plugins depend on, so it stays small, stable and
  * versionable: a field enters it only when a consumer needs it, never
- * speculatively. Deduplication, durable acceptance, actor identity beyond the
- * provider's id, session routing and visibility rules are implemented by a
- * consumer listening to `channel/inbound`, or by the code that calls
- * {@link OutboundMessage} sends.
+ * speculatively. Deduplication, actor identity beyond the provider's id, session
+ * routing and visibility rules are implemented by a consumer listening to
+ * `channel/inbound`, registering a {@link ChannelInboundSink}, or by the code
+ * that calls {@link OutboundMessage} sends.
  * @module @contexera/dsh-channel-gateway/contracts
  */
 
@@ -145,14 +145,41 @@ export interface ChannelCapabilities {
   readonly maxTextLength: number
 }
 
+/**
+ * Where an inbound message is durably accepted, when a consumer needs that.
+ *
+ * A gateway with no sink only announces: `channel/inbound` is a synchronous
+ * broadcast, so the gateway can promise that an authorized message was
+ * announced and nothing more — not that a consumer persisted it, not that its
+ * later work succeeded, and not that the provider will not hand it over again.
+ * A sink is how a consumer asks for more, because a promise the adapter can
+ * await is the only thing that ties a provider cursor to durable acceptance.
+ */
+export interface ChannelInboundSink {
+  /**
+   * Persist or durably enqueue one authorized message. Resolve only after the
+   * message is accepted by the sink.
+   *
+   * The sink owns `(channel, providerMessageId)` deduplication: a gateway keeps
+   * no business dedupe state. It must be idempotent, because an adapter may
+   * deliver a whole page again when one delivery in it failed.
+   */
+  accept(message: InboundMessage): Promise<void>
+}
+
 /** The gateway's half of a channel's life, handed over at start. */
 export interface ChannelInbox {
   /**
    * Report one normalized inbound message. Authorization and the
    * `channel/inbound` event happen behind this call, so a channel never
    * decides who may speak.
+   *
+   * A channel that can re-read a message must await this before advancing its
+   * own provider cursor or offset: the returned promise settles only once the
+   * message has been accepted, and it rejects when a configured sink rejected
+   * it, in which case the channel must not treat the message as delivered.
    */
-  deliver(message: InboundMessage): void
+  deliver(message: InboundMessage): Promise<void>
 }
 
 /** One transport adapter, as the gateway sees it. */

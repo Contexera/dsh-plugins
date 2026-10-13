@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { allowlistAuth } from '../src/auth.ts'
-import type { Channel, ChannelInbox, InboundMessage } from '../src/contracts.ts'
+import type { Channel, ChannelInboundSink, ChannelInbox, InboundMessage } from '../src/contracts.ts'
 import { ChannelGatewayError } from '../src/errors.ts'
 import { ChannelGateway } from '../src/gateway.ts'
 
@@ -209,5 +209,146 @@ describe('ChannelGateway', () => {
       .rejects.toThrow(ChannelGatewayError)
     await expect(ctx.channels.resolveAttachment('plain', { kind: 'image', ref: 'r' }))
       .rejects.toThrow(ChannelGatewayError)
+  })
+})
+
+/**
+ * The reliable acceptance seam. Without a sink the gateway only announces, so
+ * these tests pin what a sink adds: `deliver` settles on acceptance, a rejected
+ * acceptance is visible to the adapter (which is what lets it hold its provider
+ * cursor), and the announcement never precedes acceptance.
+ */
+describe('ChannelGateway inbound sink', () => {
+  /** A sink that records what it accepted, and can be made to fail or stall. */
+  function recordingSink() {
+    const accepted: InboundMessage[] = []
+    let mode: 'ok' | 'reject' | 'stall' = 'ok'
+    let release: (() => void) | undefined
+    const sink: ChannelInboundSink = {
+      accept(message) {
+        accepted.push(message)
+        if (mode === 'reject') return Promise.reject(new Error('the store is full'))
+        if (mode === 'stall') return new Promise<void>(resolve => { release = resolve })
+        return Promise.resolve()
+      },
+    }
+    return {
+      sink,
+      accepted,
+      fail: () => { mode = 'reject' },
+      stall: () => { mode = 'stall' },
+      release: () => { release?.() },
+    }
+  }
+
+  it('refuses a second sink while one is registered', async () => {
+    const { ctx } = await mount(['*'])
+    ctx.channels.registerInboundSink(recordingSink().sink)
+
+    expect(() => ctx.channels.registerInboundSink(recordingSink().sink)).toThrow(ChannelGatewayError)
+  })
+
+  it('accepts a new sink once the previous one is unregistered', async () => {
+    const { ctx } = await mount(['*'])
+    const stop = ctx.channels.registerInboundSink(recordingSink().sink)
+    stop()
+
+    expect(() => ctx.channels.registerInboundSink(recordingSink().sink)).not.toThrow()
+  })
+
+  it('settles deliver only after the sink accepted', async () => {
+    const { ctx, seen } = await mount(['*'])
+    const sink = recordingSink()
+    sink.stall()
+    ctx.channels.registerInboundSink(sink.sink)
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    let settled = false
+    const delivered = registered.firstInbox()?.deliver(inbound()).then(() => { settled = true })
+    await settle()
+
+    // The sink has the message in hand but has not accepted it, so the adapter
+    // has nothing to advance past and no listener has been told anything.
+    expect(sink.accepted.map(message => message.providerMessageId)).toEqual(['1'])
+    expect(settled).toBe(false)
+    expect(seen).toEqual([])
+
+    sink.release()
+    await delivered
+    expect(settled).toBe(true)
+    expect(seen.map(message => message.providerMessageId)).toEqual(['1'])
+  })
+
+  it('announces nothing when the sink rejects, and reports the rejection to the adapter', async () => {
+    const { ctx, seen } = await mount(['*'])
+    const sink = recordingSink()
+    sink.fail()
+    ctx.channels.registerInboundSink(sink.sink)
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    await expect(registered.firstInbox()?.deliver(inbound())).rejects.toThrow('the store is full')
+    expect(seen).toEqual([])
+  })
+
+  it('keeps announcing without a sink, so an existing consumer is unaffected', async () => {
+    const { ctx, seen } = await mount(['*'])
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    await registered.firstInbox()?.deliver(inbound())
+
+    expect(seen.map(message => message.providerMessageId)).toEqual(['1'])
+  })
+
+  it('stops announcing once the sink is unregistered again', async () => {
+    const { ctx, seen } = await mount(['*'])
+    const sink = recordingSink()
+    const stop = ctx.channels.registerInboundSink(sink.sink)
+    stop()
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    await registered.firstInbox()?.deliver(inbound())
+
+    expect(sink.accepted).toEqual([])
+    expect(seen.map(message => message.providerMessageId)).toEqual(['1'])
+  })
+
+  it('does not reach the sink for a message that fails ownership or authorization', async () => {
+    const { ctx, seen } = await mount(['test:42'])
+    const sink = recordingSink()
+    ctx.channels.registerInboundSink(sink.sink)
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    await registered.firstInbox()?.deliver(inbound({ channel: 'other' }))
+    await registered.firstInbox()?.deliver(inbound({ actor: { id: '7' } }))
+
+    // Refusing a message is a decision about it, so it resolves: an adapter that
+    // re-read it would only be refused again, and its cursor should move on.
+    expect(sink.accepted).toEqual([])
+    expect(seen).toEqual([])
+  })
+
+  it('reports a failure in the authorization policy as a drop, not a sink failure', async () => {
+    const ctx = new Context()
+    const sink = recordingSink()
+    ctx.plugin(ChannelGateway, { auth: { authorize: () => { throw new Error('policy is broken') } } })
+    await settle()
+    ctx.channels.registerInboundSink(sink.sink)
+    const registered = testChannel('test')
+    ctx.channels.register(registered.channel)
+    await settle()
+
+    await registered.firstInbox()?.deliver(inbound())
+
+    expect(sink.accepted).toEqual([])
   })
 })

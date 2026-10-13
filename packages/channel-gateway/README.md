@@ -10,6 +10,10 @@ The package covers the transport half of a chat integration: it fixes the
 message contract and the seam between a provider and a consumer. What a message
 means, whether it was seen before, and where it goes next are decided above it.
 
+An event alone cannot promise that a consumer stored anything, so a consumer that
+needs durable intake registers an inbound sink, and the gateway awaits it before
+announcing. Without a sink the event is best-effort notification.
+
 ## Contract
 
 Five surfaces, and they are the public API — keep them small, stable and
@@ -20,8 +24,9 @@ versionable. Field-by-field reference in [`docs/architecture.md`](docs/architect
 | Inbound | `InboundMessage { channel, providerMessageId, actor, place, visibility, text, attachments?, timestamp, replyTo?, raw? }` |
 | Outbound | `OutboundMessage { channel, route, text, attachments?, replyTo?, format? }` |
 | A transport | `Channel { name, capabilities, start(inbox), stop(), send(message), resolveAttachment? }` |
-| The gateway | `ctx.channels.register(channel)` · `ctx.channels.send(message)` · `ctx.channels.resolveAttachment(channel, attachment)` · event `channel/inbound` |
+| The gateway | `ctx.channels.register(channel)` · `ctx.channels.send(message)` · `ctx.channels.resolveAttachment(channel, attachment)` · `ctx.channels.registerInboundSink(sink)` · event `channel/inbound` |
 | Authorization | `ChannelAuth { authorize(request) }`, defaulting to an allowlist |
+| Durable intake | `ChannelInboundSink { accept(message): Promise<void> }`, at most one per gateway |
 
 Three parts of the contract exist because a consumer needs them and a provider
 does not supply them in a usable form:
@@ -69,6 +74,9 @@ An empty `allow` list admits nobody.
 
 ## Consuming it
 
+A listener is enough when losing a message to a restart is acceptable: the event
+is a notification, and the gateway does not wait for the handler.
+
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@contexera/dsh-channel-gateway'
@@ -78,8 +86,7 @@ export const inject = ['channels']
 
 export function apply(ctx: Context) {
   ctx.on('channel/inbound', (message) => {
-    // Deduplicate on (message.channel, message.providerMessageId), accept it
-    // durably, route it.
+    // Best-effort: this promise is not awaited by the gateway.
     void handle(message)
   })
 }
@@ -87,6 +94,27 @@ export function apply(ctx: Context) {
 async function handle(message: InboundMessage) {
   // ... later, answer it:
   await ctx.channels.send({ channel: message.channel, route: message.place.route, text: 'ok' })
+}
+```
+
+A sink is what makes intake durable: the gateway awaits it, and an adapter will
+not advance its provider cursor past a message the sink refused. It must be
+idempotent, because a page that partially failed is handed over again.
+
+```ts
+export function apply(ctx: Context) {
+  ctx.channels.registerInboundSink({
+    async accept(message) {
+      // Deduplicate on (message.channel, message.providerMessageId) yourself:
+      // the gateway keeps no dedupe state.
+      await store.appendOnce(message)
+    },
+  })
+
+  ctx.on('channel/inbound', (message) => {
+    // Announced only after accept() resolved, so it is durable by now.
+    void route(message)
+  })
 }
 ```
 
