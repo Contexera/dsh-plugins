@@ -41,6 +41,13 @@ import { silentLog, type AdapterLog } from '../log.ts'
 import { splitText } from '../text.ts'
 import { splitWeixinMarkdown } from './markdown.ts'
 import { decryptAesEcb, encryptAesEcb } from './crypto.ts'
+import {
+  assertFetchableAttachmentUrl,
+  deriveAttachmentRefSecret,
+  openAttachmentRef,
+  tryMintAttachmentRef,
+  type WeixinMediaRef,
+} from './attachment-ref.ts'
 
 /** This adapter's own split threshold; a longer text becomes several messages. */
 export const WEIXIN_MAX_TEXT_LENGTH = 2048
@@ -153,21 +160,6 @@ interface GetUploadUrlResponse {
   upload_param?: string
 }
 
-/**
- * What a later `resolveAttachment` needs to fetch and decrypt one inbound media
- * item, packed into the attachment's opaque `ref`. Short keys keep the ref
- * compact: `k` kind, `u` full url, `e` encrypt_query_param, `a` media aes key
- * (base64), `h` item aes key (hex), `n` file name.
- */
-interface WeixinMediaRef {
-  k: ChannelAttachment['kind']
-  u?: string
-  e?: string
-  a?: string
-  h?: string
-  n?: string
-}
-
 /** How one weixin channel is built; the plugin row supplies it. */
 export interface WeixinChannelOptions {
   readonly token: string
@@ -184,6 +176,19 @@ export interface WeixinChannelOptions {
   readonly appClientVersion?: number
   /** An optional `SKRouteTag` header. */
   readonly routeTag?: string
+  /**
+   * Hosts an inbound attachment may be downloaded from. Defaults to the host of
+   * {@link WeixinChannelOptions.cdnBaseUrl} plus the iLink CDN; a provider URL
+   * pointing anywhere else is refused rather than fetched.
+   */
+  readonly attachmentHosts?: readonly string[]
+  /**
+   * A stable secret for attachment-ref MACs, when refs must outlive a token
+   * rotation. Defaults to a key derived from the bot token.
+   */
+  readonly attachmentRefSecret?: string
+  /** Ceiling on one attachment download, in bytes; a longer body is aborted. */
+  readonly maxAttachmentBytes?: number
   readonly log?: AdapterLog
 }
 
@@ -230,24 +235,25 @@ function parseRoute(route: string): { userId: string; contextToken: string } {
 
 /**
  * Pack what a later download needs into the attachment's opaque `ref`, or
- * nothing when the item carries no locator to fetch from. The key and locator
- * travel in the ref so `resolveAttachment` can work from the attachment alone.
+ * nothing when the item carries no locator to fetch from. The ref is
+ * authenticated: it carries a MAC over the descriptor, so `resolveAttachment`
+ * can tell a ref this channel minted from a string a caller composed.
  */
-function mediaRefOf(kind: ChannelAttachment['kind'], value: WeixinMedia): string | undefined {
+function mediaRefOf(kind: ChannelAttachment['kind'], value: WeixinMedia, secret: Buffer): string | undefined {
   const fullUrl = value.media?.full_url?.trim() ?? ''
   const encParam = value.media?.encrypt_query_param ?? ''
   if (fullUrl === '' && encParam === '') return undefined
-  const ref: WeixinMediaRef = { k: kind }
-  if (fullUrl !== '') ref.u = fullUrl
-  if (encParam !== '') ref.e = encParam
-  if (value.media?.aes_key !== undefined && value.media.aes_key !== '') ref.a = value.media.aes_key
-  if (value.aeskey !== undefined && value.aeskey !== '') ref.h = value.aeskey
-  if (value.file_name !== undefined && value.file_name !== '') ref.n = value.file_name
-  return Buffer.from(JSON.stringify(ref), 'utf8').toString('base64url')
+  const descriptor: WeixinMediaRef = { k: kind }
+  if (fullUrl !== '') descriptor.u = fullUrl
+  if (encParam !== '') descriptor.e = encParam
+  if (value.media?.aes_key !== undefined && value.media.aes_key !== '') descriptor.a = value.media.aes_key
+  if (value.aeskey !== undefined && value.aeskey !== '') descriptor.h = value.aeskey
+  if (value.file_name !== undefined && value.file_name !== '') descriptor.n = value.file_name
+  return tryMintAttachmentRef(descriptor, secret)
 }
 
 /** Media an inbound item carried, with the handle a download later reads. */
-function attachmentsOf(items: readonly WeixinItem[]): readonly ChannelAttachment[] {
+function attachmentsOf(items: readonly WeixinItem[], secret: Buffer): readonly ChannelAttachment[] {
   const found: ChannelAttachment[] = []
   for (const item of items) {
     const media: readonly (readonly [ChannelAttachment['kind'], WeixinMedia | undefined])[] = [
@@ -259,7 +265,7 @@ function attachmentsOf(items: readonly WeixinItem[]): readonly ChannelAttachment
     for (const [kind, value] of media) {
       if (value === undefined) continue
       const size = value.mid_size ?? (value.len === undefined ? undefined : Number(value.len))
-      const ref = mediaRefOf(kind, value)
+      const ref = mediaRefOf(kind, value, secret)
       found.push({
         kind,
         ...(value.file_name === undefined ? {} : { name: value.file_name }),
@@ -299,6 +305,14 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
   const appId = options.appId ?? ''
   const appClientVersion = options.appClientVersion ?? 1
   const routeTag = options.routeTag
+  // Attachment refs are signed so a caller cannot hand back a ref this channel
+  // never minted; the key is derived from the token unless a deployment pins
+  // one to keep refs valid across a token rotation.
+  const refSecret = deriveAttachmentRefSecret(options.attachmentRefSecret ?? token)
+  const attachmentHosts: readonly string[] = (options.attachmentHosts ?? [
+    ...new Set([new URL(cdnBaseUrl).hostname, new URL(WEIXIN_DEFAULT_CDN_BASE_URL).hostname]),
+  ]).map(host => host.toLowerCase())
+  const maxAttachmentBytes = options.maxAttachmentBytes ?? 32 * 1024 * 1024
 
   let requestTimeoutMs = (options.pollTimeoutSec ?? 35) * 1000
   let running = false
@@ -363,7 +377,7 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     const kind: ChannelPlaceKind = direct ? 'direct' : 'group'
     const place: ChannelPlace = { route: routeOf(from, message.context_token ?? ''), kind }
     const visibility: ChannelVisibility = direct ? 'private' : 'group'
-    const attachments = attachmentsOf(items)
+    const attachments = attachmentsOf(items, refSecret)
     const id = message.message_id === undefined ? message.seq : message.message_id
     return {
       channel: 'weixin',
@@ -544,17 +558,16 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     await sendItems(userId, contextToken, clientId, [{ type: itemType, [itemKey]: mediaItem }])
   }
 
-  /** Fetch and decrypt the bytes behind an inbound media attachment. */
+  /**
+   * Fetch and decrypt the bytes behind an inbound media attachment. Every
+   * rejection before the network is a ref that did not verify — version, MAC,
+   * field bounds, kind or download host — and no request is made for one.
+   */
   async function resolveAttachment(attachment: ChannelAttachment): Promise<ResolvedAttachment> {
     if (attachment.ref === undefined) {
       throw new ChannelGatewayError('weixin cannot resolve an attachment without a ref')
     }
-    let descriptor: WeixinMediaRef
-    try {
-      descriptor = JSON.parse(Buffer.from(attachment.ref, 'base64url').toString('utf8')) as WeixinMediaRef
-    } catch {
-      throw new ChannelGatewayError('weixin attachment ref is not one this channel minted')
-    }
+    const descriptor = openAttachmentRef(attachment.ref, refSecret, attachment.kind)
     const candidates: string[] = []
     if (descriptor.u !== undefined && descriptor.u !== '') candidates.push(descriptor.u)
     if (descriptor.e !== undefined && descriptor.e !== '') {
@@ -563,6 +576,9 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     if (candidates.length === 0) {
       throw new ChannelGatewayError('weixin attachment ref carries no download locator')
     }
+    // Every candidate is checked against the allowlist before the loop, so a
+    // ref cannot smuggle one refused host in behind an allowed one.
+    for (const url of candidates) assertFetchableAttachmentUrl(url, attachmentHosts)
     // Prefer image_item.aeskey (hex) as the reference client does, then media.aes_key.
     const keyB64 = descriptor.h !== undefined && descriptor.h !== ''
       ? Buffer.from(descriptor.h, 'hex').toString('base64')
@@ -571,12 +587,10 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     let lastError: unknown
     for (const url of candidates) {
       try {
-        const response = await fetchImpl(url)
-        if (!response.ok) throw new ChannelGatewayError(`weixin media download was rejected: HTTP ${String(response.status)}`)
-        const encrypted = Buffer.from(await response.arrayBuffer())
-        const bytes = keyB64 === '' ? encrypted : decryptAesEcb(encrypted, keyB64)
+        const bytes = await downloadBytes(url)
+        const decrypted = keyB64 === '' ? bytes : decryptAesEcb(bytes, keyB64)
         return {
-          bytes: new Uint8Array(bytes),
+          bytes: new Uint8Array(decrypted),
           ...(descriptor.n === undefined ? {} : { name: descriptor.n }),
         }
       } catch (error: unknown) {
@@ -584,6 +598,47 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
       }
     }
     throw new Error(redact(`weixin media download failed: ${errorText(lastError)}`))
+  }
+
+  /**
+   * One bounded download: it carries an AbortSignal so a stop or a timeout ends
+   * it, and it stops reading at the byte ceiling instead of buffering whatever
+   * the host sends.
+   */
+  async function downloadBytes(url: string): Promise<Buffer> {
+    const timeout = AbortSignal.timeout(requestTimeoutMs)
+    const signal = abort === undefined ? timeout : AbortSignal.any([abort.signal, timeout])
+    const response = await fetchImpl(url, { signal })
+    if (!response.ok) throw new ChannelGatewayError(`weixin media download was rejected: HTTP ${String(response.status)}`)
+    const declared = Number(response.headers?.get?.('content-length') ?? Number.NaN)
+    if (Number.isFinite(declared) && declared > maxAttachmentBytes) {
+      throw new ChannelGatewayError(`weixin refuses an attachment larger than ${String(maxAttachmentBytes)} bytes`)
+    }
+    if (response.body === null || response.body === undefined) {
+      const body = Buffer.from(await response.arrayBuffer())
+      if (body.length > maxAttachmentBytes) {
+        throw new ChannelGatewayError(`weixin refuses an attachment larger than ${String(maxAttachmentBytes)} bytes`)
+      }
+      return body
+    }
+    const chunks: Buffer[] = []
+    let total = 0
+    const reader = response.body.getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value === undefined) continue
+        total += value.byteLength
+        if (total > maxAttachmentBytes) {
+          throw new ChannelGatewayError(`weixin refuses an attachment larger than ${String(maxAttachmentBytes)} bytes`)
+        }
+        chunks.push(Buffer.from(value))
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined)
+    }
+    return Buffer.concat(chunks)
   }
 
   const capabilities: ChannelCapabilities = {

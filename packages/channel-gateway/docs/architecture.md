@@ -183,7 +183,7 @@ the partial-delivery error above rather than a bare transport failure.
 | `place.kind` | `group_id` present → `group`, otherwise `direct` |
 | `visibility` | as `place.kind` |
 | `text` | `text_item.text` values, or a voice item's transcript |
-| `attachments` | `image_item`/`voice_item`/`file_item`/`video_item`; the download locator and key are packed into `ref`, so `resolveAttachment` can fetch and AES-128-ECB-decrypt the bytes |
+| `attachments` | `image_item`/`voice_item`/`file_item`/`video_item`; the download locator and key are packed into a signed `ref`, so `resolveAttachment` can fetch and AES-128-ECB-decrypt the bytes |
 | `timestamp` | `create_time_ms` |
 
 A message whose `message_type` is `2` is this bot's own send coming back, and is
@@ -192,6 +192,27 @@ retrying forever. Before a send, a context token past its trusted window is
 refreshed through `getconfig`. Outbound media is uploaded to the iLink CDN
 (AES-128-ECB, per `getuploadurl`) and sent as a media item; a transient send
 failure is retried with backoff.
+
+### Attachment refs
+
+`ref` is the one attachment field a caller can compose, and
+`resolveAttachment` is the one call that turns a ref into a network request, so
+the ref is authenticated rather than merely parsed. It is
+`base64url({ v, d, m })`: a version, the descriptor (`k` kind, `u` full url,
+`e` encrypt_query_param, `a` media aes key, `h` item aes key, `n` file name),
+and an HMAC-SHA256 over the descriptor's canonical JSON.
+
+`resolveAttachment` verifies the version, the field bounds, the MAC and the
+caller-supplied `kind` before it fetches anything, and a ref that fails any of
+them raises `ChannelGatewayError` with no request made. A verified locator must
+then be `https:` and its host must be one of `attachmentHosts` (default: the
+configured CDN host plus the iLink CDN); the download carries an `AbortSignal`
+and stops at `maxAttachmentBytes`. The MAC key derives from the bot token, so a
+token rotation invalidates refs minted under the old one; `attachmentRefSecret`
+pins a stable key when refs must outlive a rotation. A descriptor that cannot be
+represented within the field bounds is reported as an attachment with no `ref`,
+because provider fields arrive unbounded and a hostile payload must not fail the
+message it arrived in.
 
 ## Host compatibility
 

@@ -309,7 +309,7 @@ describe('weixin channel', () => {
       }
       throw new Error(`unexpected ${url}`)
     }) as unknown as typeof fetch
-    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1, attachmentHosts: ['cdn.test'] })
     const seen: InboundMessage[] = []
     await channel.start({ deliver: message => { seen.push(message) } })
     await waitFor(() => seen.length > 0)
@@ -353,5 +353,176 @@ describe('weixin channel', () => {
     const item = sendBody?.msg?.item_list?.[0]
     expect(item?.type).toBe(2)
     expect(item?.image_item?.media?.encrypt_query_param).toBe('DL-PARAM')
+  })
+})
+
+/**
+ * The ref is the one attachment field a caller can compose, so these tests hold
+ * the line the design draws: a ref the channel did not mint never reaches the
+ * network, and a minted one is still bounded on the way out.
+ */
+describe('weixin attachment refs are authenticated before any network access', () => {
+  /** A channel whose every fetch is recorded, over a controllable page. */
+  async function channelWithMedia(item: unknown, options: {
+    readonly attachmentHosts?: readonly string[]
+    readonly maxAttachmentBytes?: number
+    readonly download?: (url: string, init?: Parameters<typeof fetch>[1]) => Response
+  } = {}) {
+    const fetched: string[] = []
+    const page = { msgs: [{ ...textMessage, item_list: [item] }] }
+    let polls = 0
+    const impl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = String(input)
+      if (url.includes('/ilink/bot/getupdates')) {
+        polls += 1
+        if (polls === 1) return jsonResponse(page)
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+        })
+      }
+      fetched.push(url)
+      if (options.download === undefined) throw new Error(`unexpected download ${url}`)
+      return options.download(url, init)
+    }) as unknown as typeof fetch
+    const channel = createWeixinChannel({
+      token: 'TOKEN', fetch: impl, retryDelayMs: 1,
+      ...(options.attachmentHosts === undefined ? {} : { attachmentHosts: options.attachmentHosts }),
+      ...(options.maxAttachmentBytes === undefined ? {} : { maxAttachmentBytes: options.maxAttachmentBytes }),
+    })
+    const seen: InboundMessage[] = []
+    await channel.start({ deliver: message => { seen.push(message) } })
+    await waitFor(() => seen.length > 0)
+    await channel.stop()
+    return { channel, fetched, attachment: seen[0]?.attachments?.[0] }
+  }
+
+  const imageItem = {
+    type: 2,
+    msg_id: 'm-sec',
+    image_item: { media: { full_url: 'https://cdn.test/enc', aes_key: 'AAAAAAAAAAAAAAAAAAAAAA==' } },
+  }
+
+  it('refuses a ref a caller composed without contacting the network', async () => {
+    const { channel, fetched, attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
+    expect(attachment?.ref).toBeDefined()
+    // A ref that is well-formed base64url of a plausible descriptor, but unsigned.
+    const forged = Buffer.from(JSON.stringify({
+      v: 1,
+      d: { k: 'image', u: 'https://evil.test/steal' },
+      m: 'not-a-real-mac',
+    }), 'utf8').toString('base64url')
+
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: forged }))
+      .rejects.toThrow(/not one this channel minted/)
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: 'not-base64url-json' }))
+      .rejects.toThrow(ChannelGatewayError)
+    await expect(channel.resolveAttachment?.({ kind: 'image' }))
+      .rejects.toThrow(/without a ref/)
+    expect(fetched).toEqual([])
+  })
+
+  it('refuses a tampered descriptor, a wrong kind, and a foreign version', async () => {
+    const { channel, fetched, attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
+    const ref = attachment!.ref!
+
+    // Re-encode the signed envelope with the locator swapped for another host.
+    const envelope = JSON.parse(Buffer.from(ref, 'base64url').toString('utf8')) as { d: { u?: string } }
+    envelope.d.u = 'https://evil.test/steal'
+    const tampered = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: tampered }))
+      .rejects.toThrow(/not one this channel minted/)
+
+    // The signed kind is part of what the MAC covers.
+    await expect(channel.resolveAttachment?.({ kind: 'file', ref }))
+      .rejects.toThrow(/different attachment kind/)
+
+    const future = JSON.parse(Buffer.from(ref, 'base64url').toString('utf8')) as { v: number }
+    future.v = 99
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: Buffer.from(JSON.stringify(future), 'utf8').toString('base64url') }))
+      .rejects.toThrow(/another version/)
+    expect(fetched).toEqual([])
+  })
+
+  it('refuses a non-https locator and a host outside the allowlist', async () => {
+    // The allowlist is enforced against the signed descriptor, so a provider
+    // that hands out a plain-http or third-party URL cannot get it fetched.
+    const { channel, fetched, attachment } = await channelWithMedia(
+      { type: 2, msg_id: 'm-http', image_item: { media: { full_url: 'http://cdn.test/enc' } } },
+      { attachmentHosts: ['cdn.test'] },
+    )
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
+      .rejects.toThrow(/only https is fetched/)
+    expect(fetched).toEqual([])
+
+    const outside = await channelWithMedia(
+      { type: 2, msg_id: 'm-out', image_item: { media: { full_url: 'https://evil.test/enc' } } },
+      { attachmentHosts: ['cdn.test'] },
+    )
+    await expect(outside.channel.resolveAttachment?.({ kind: 'image', ref: outside.attachment!.ref! }))
+      .rejects.toThrow(/host this channel is not configured for/)
+    expect(outside.fetched).toEqual([])
+  })
+
+  it('aborts a download that exceeds the byte ceiling', async () => {
+    const oversized = new Uint8Array(4096)
+    const { channel, attachment } = await channelWithMedia(imageItem, {
+      attachmentHosts: ['cdn.test'],
+      maxAttachmentBytes: 1024,
+      download: () => ({ ok: true, status: 200, arrayBuffer: () => Promise.resolve(toArrayBuffer(Buffer.from(oversized))) }) as unknown as Response,
+    })
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
+      .rejects.toThrow(/larger than 1024 bytes/)
+  })
+
+  it('honours a declared content-length before reading the body', async () => {
+    let bodyRead = false
+    const { channel, attachment } = await channelWithMedia(imageItem, {
+      attachmentHosts: ['cdn.test'],
+      maxAttachmentBytes: 1024,
+      download: () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '999999' }),
+        arrayBuffer: () => { bodyRead = true; return Promise.resolve(new ArrayBuffer(0)) },
+      }) as unknown as Response,
+    })
+    await expect(channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
+      .rejects.toThrow(/larger than 1024 bytes/)
+    expect(bodyRead).toBe(false)
+  })
+
+  it('carries an AbortSignal on the download request', async () => {
+    let sawSignal = false
+    const { channel, attachment } = await channelWithMedia(imageItem, {
+      attachmentHosts: ['cdn.test'],
+      download: (_url, init) => {
+        sawSignal = init?.signal !== undefined
+        return { ok: true, status: 200, arrayBuffer: () => Promise.resolve(toArrayBuffer(Buffer.from('x'))) } as unknown as Response
+      },
+    })
+    await channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! })
+    expect(sawSignal).toBe(true)
+  })
+
+  it('keeps the token and the AES key out of a rejection message', async () => {
+    const { channel, attachment } = await channelWithMedia(imageItem, {
+      attachmentHosts: ['cdn.test'],
+      download: () => { throw new Error('socket hang up') },
+    })
+    const error = await channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }).then(
+      () => undefined,
+      (thrown: unknown) => thrown as Error,
+    )
+    expect(error).toBeDefined()
+    expect(error!.message).not.toContain('TOKEN')
+    expect(error!.message).not.toContain('AAAAAAAAAAAAAAAAAAAAAA==')
+  })
+
+  it('mints a ref bound to its own channel token', async () => {
+    const { attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
+    // Same descriptor, a different token: the MAC no longer verifies.
+    const other = createWeixinChannel({ token: 'OTHER', fetch: (async () => { throw new Error('no network') }) as unknown as typeof fetch })
+    await expect(other.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
+      .rejects.toThrow(/not one this channel minted/)
   })
 })
