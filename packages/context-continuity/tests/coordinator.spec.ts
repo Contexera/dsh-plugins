@@ -417,6 +417,189 @@ describe('checkpoint continuations', () => {
   })
 })
 
+/**
+ * The latch is process state the projection cannot see, so its lifecycle has to
+ * be asserted directly: it must exist for the scheduling window, and it must be
+ * gone once the durable delivery event proves it served its purpose — otherwise
+ * a long-running subject accumulates one entry per checkpoint forever.
+ */
+describe('checkpoint continuation latch lifecycle', () => {
+  /** Several subjects on one coordinator, each with its own Agent and projection. */
+  function multiHarness() {
+    const agents = new Map<string, FakeAgent>()
+    const projections = new Map<string, ContextProjectionState>()
+    const host: ContextContinuityHost<string> = {
+      agentForSubject: id => agents.get(id) as unknown as Agent | undefined,
+      subjectForAgent: candidate => {
+        for (const [id, agent] of agents) {
+          if ((agent as unknown as Agent) === candidate) return { id, sessionId: SESSION }
+        }
+        return undefined
+      },
+      projectionForSubject: id => projections.get(id),
+      executeTransition: () => Promise.resolve(),
+      rolloverIdentity: previousSessionId => ({ newSessionId: NEW_SESSION, requestId: `rollover:${previousSessionId}` }),
+      isEphemeralNotice: () => false,
+      log: () => undefined,
+    }
+    const coordinator = new ContextContinuityCoordinator<string>(host, codec)
+    return {
+      coordinator,
+      addSubject(id: string, overrides: Partial<ContextProjectionState> = {}) {
+        const agent = new FakeAgent()
+        agents.set(id, agent)
+        projections.set(id, state(overrides))
+        return { agent, asAgent: agent as unknown as Agent }
+      },
+      setProjection(id: string, next: ContextProjectionState) {
+        projections.set(id, next)
+      },
+    }
+  }
+
+  /** The private latch map, read directly: it is the subject of these assertions. */
+  const latchesOf = (coordinator: ContextContinuityCoordinator<string>) =>
+    (coordinator as unknown as { scheduledContinuations: Map<string, Set<string>> }).scheduledContinuations
+
+  const continuationEvent = (seq: number, checkpointRef: string): SessionEvent =>
+    ({ type: 'user/message', seq, data: codec.createCheckpointContinuationMessage(checkpointRef) }) as unknown as SessionEvent
+
+  it('holds one latch per resolved checkpoint, then releases it on the durable delivery', async () => {
+    const test = multiHarness()
+    const { agent, asAgent } = test.addSubject(SUBJECT, {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:1', turnEndSeq: 31 })],
+    })
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, turnEnd(31))
+    await settle()
+    expect(agent.followups).toHaveLength(1)
+    expect(latchesOf(test.coordinator).get(SUBJECT)).toEqual(new Set(['checkpoint:1']))
+
+    // The notice lands durably: the projection records it and the latch retires.
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, continuationEvent(33, 'checkpoint:1'))
+    expect(latchesOf(test.coordinator).has(SUBJECT)).toBe(false)
+
+    // Released means a repair over a stale projection may schedule again; a
+    // latch that outlived its delivery would silently suppress that.
+    test.coordinator.repairContinuations(asAgent, state({
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:1', turnEndSeq: 31 })],
+    }))
+    expect(agent.followups).toHaveLength(2)
+  })
+
+  it('does not accumulate latches across many resolved checkpoints', async () => {
+    const test = multiHarness()
+    const refs = Array.from({ length: 64 }, (_value, index) => `checkpoint:${String(index)}`)
+    const { asAgent } = test.addSubject(SUBJECT, {
+      checkpoints: refs.map(ref => checkpoint({ checkpointRef: ref, turnEndSeq: 31 })),
+    })
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, turnEnd(31))
+    await settle()
+    expect(latchesOf(test.coordinator).get(SUBJECT)?.size).toBe(64)
+
+    for (const [index, ref] of refs.entries()) {
+      test.coordinator.onSessionEvent(SUBJECT, asAgent, continuationEvent(40 + index, ref))
+    }
+    expect(latchesOf(test.coordinator).has(SUBJECT)).toBe(false)
+    expect(latchesOf(test.coordinator).size).toBe(0)
+  })
+
+  it('releases every latch of a subject that stops being tracked', async () => {
+    const test = multiHarness()
+    const { asAgent } = test.addSubject(SUBJECT, {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:1', turnEndSeq: 31 })],
+    })
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, turnEnd(31))
+    await settle()
+    expect(latchesOf(test.coordinator).has(SUBJECT)).toBe(true)
+
+    test.coordinator.stopTracking(SUBJECT)
+    expect(latchesOf(test.coordinator).has(SUBJECT)).toBe(false)
+  })
+
+  it('clears every subject\'s latches on dispose', async () => {
+    const test = multiHarness()
+    for (const id of ['member-1', 'member-2']) {
+      const { asAgent } = test.addSubject(id, {
+        checkpoints: [checkpoint({ checkpointRef: 'checkpoint:1', turnEndSeq: 31 })],
+      })
+      test.coordinator.onSessionEvent(id, asAgent, turnEnd(31))
+      await settle()
+    }
+    expect(latchesOf(test.coordinator).size).toBe(2)
+
+    test.coordinator.dispose()
+    expect(latchesOf(test.coordinator).size).toBe(0)
+  })
+
+  it('keeps an identical checkpoint ref on two subjects from suppressing either', async () => {
+    const test = multiHarness()
+    const first = test.addSubject('member-1', {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:shared', turnEndSeq: 31 })],
+    })
+    const second = test.addSubject('member-2', {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:shared', turnEndSeq: 31 })],
+    })
+
+    test.coordinator.onSessionEvent('member-1', first.asAgent, turnEnd(31))
+    test.coordinator.onSessionEvent('member-2', second.asAgent, turnEnd(31))
+    await settle()
+
+    expect(first.agent.followups).toHaveLength(1)
+    expect(second.agent.followups).toHaveLength(1)
+  })
+
+  it('keeps subjects whose ids and refs contain the separator from colliding', async () => {
+    // Under a `${subject}:${ref}` key both of these are the same string, so the
+    // second subject's continuation would be suppressed as a duplicate.
+    const test = multiHarness()
+    const first = test.addSubject('team:a', {
+      checkpoints: [checkpoint({ checkpointRef: 'b:checkpoint', turnEndSeq: 31 })],
+    })
+    const second = test.addSubject('team:a:b', {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint', turnEndSeq: 31 })],
+    })
+
+    test.coordinator.onSessionEvent('team:a', first.asAgent, turnEnd(31))
+    test.coordinator.onSessionEvent('team:a:b', second.asAgent, turnEnd(31))
+    await settle()
+
+    expect(first.agent.followups).toHaveLength(1)
+    expect(second.agent.followups).toHaveLength(1)
+  })
+
+  it('treats a ref with slashes or Unicode as one opaque value', async () => {
+    const test = multiHarness()
+    const weird = 'checkpoint/../设计:✓'
+    const { agent, asAgent } = test.addSubject(SUBJECT, {
+      checkpoints: [checkpoint({ checkpointRef: weird, turnEndSeq: 31 })],
+    })
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, turnEnd(31))
+    await settle()
+    expect(agent.followups).toHaveLength(1)
+    expect(codec.continuationCheckpointRefOf(agent.followups[0]!)).toBe(weird)
+
+    // Only that exact ref retires the latch; a lookalike does not.
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, continuationEvent(33, 'checkpoint/../设计'))
+    expect(latchesOf(test.coordinator).get(SUBJECT)).toEqual(new Set([weird]))
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, continuationEvent(34, weird))
+    expect(latchesOf(test.coordinator).has(SUBJECT)).toBe(false)
+  })
+
+  it('ignores an ordinary user message when deciding what to release', async () => {
+    const test = multiHarness()
+    const { asAgent } = test.addSubject(SUBJECT, {
+      checkpoints: [checkpoint({ checkpointRef: 'checkpoint:1', turnEndSeq: 31 })],
+    })
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, turnEnd(31))
+    await settle()
+
+    test.coordinator.onSessionEvent(SUBJECT, asAgent, {
+      type: 'user/message', seq: 33, data: external('an ordinary prompt'),
+    } as unknown as SessionEvent)
+    expect(latchesOf(test.coordinator).get(SUBJECT)).toEqual(new Set(['checkpoint:1']))
+  })
+})
+
 describe('crash recovery', () => {
   it('adopts an intent whose turn never ended and then follows live events', async () => {
     const test = harness()

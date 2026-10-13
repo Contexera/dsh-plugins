@@ -82,8 +82,15 @@ export class ContextContinuityCoordinator<SubjectId> {
    * pressure policy must not reject that turn.
    */
   private readonly holds = new Map<SubjectId, Agent>()
-  /** Per-subject latch for the in-process scheduling→delivery window. */
-  private readonly scheduledContinuations = new Set<string>()
+  /**
+   * The checkpoint refs whose quiet continuation this process has scheduled but
+   * not yet seen delivered, grouped by subject. Grouping is what makes the
+   * lifecycle correct: a subject's latches are released as a unit when it stops
+   * being tracked, and a ref is stored as itself rather than concatenated with a
+   * subject id, so two subjects that use the same ref cannot suppress each
+   * other and no id containing the separator can collide with another.
+   */
+  private readonly scheduledContinuations = new Map<SubjectId, Set<string>>()
   private disposed = false
 
   constructor(
@@ -106,6 +113,10 @@ export class ContextContinuityCoordinator<SubjectId> {
     if (this.disposed) return
     if (event.type === 'tool/result') {
       this.onToolResult(id, agent, event)
+      return
+    }
+    if (event.type === 'user/message') {
+      this.releaseDeliveredContinuations(id, event)
       return
     }
     if (event.type === 'turn/end') {
@@ -310,11 +321,17 @@ export class ContextContinuityCoordinator<SubjectId> {
     return captured
   }
 
-  /** Drop one subject's bookkeeping; the host calls this on dispose/removal. */
+  /**
+   * Drop one subject's bookkeeping; the host calls this on dispose/removal.
+   * Its continuation latches go with it: a subject that is no longer tracked
+   * can never observe the delivery that would otherwise release them, so
+   * keeping them would be an unbounded leak keyed on dead subjects.
+   */
   stopTracking(id: SubjectId): void {
     this.subjects.delete(id)
     this.capturedInput.delete(id)
     this.holds.delete(id)
+    this.scheduledContinuations.delete(id)
   }
 
   dispose(): void {
@@ -322,6 +339,7 @@ export class ContextContinuityCoordinator<SubjectId> {
     this.subjects.clear()
     this.capturedInput.clear()
     this.holds.clear()
+    this.scheduledContinuations.clear()
   }
 
   private onToolResult(id: SubjectId, agent: Agent, event: SessionEvent & { type: 'tool/result' }): void {
@@ -372,17 +390,45 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Claim the in-process latch for one resolved checkpoint continuation.
-   * Returns the latch key when this caller won it, or undefined when the
-   * checkpoint never concluded a turn, was already delivered durably, or is
-   * latched already. The caller releases the latch on its own failure path.
+   * Returns true when this caller won it, or false when the checkpoint never
+   * concluded a turn, was already delivered durably, or is latched already. The
+   * caller releases the latch on its own failure path and when the durable
+   * delivery event is observed.
    */
-  private claimContinuationLatch(id: SubjectId, state: ContextProjectionState, checkpoint: ContextCheckpointEntry): string | undefined {
-    if (checkpoint.turnEndSeq === -1) return undefined
-    if (continuationDelivered(state, checkpoint.checkpointRef)) return undefined
-    const latch = `${String(id)}:${checkpoint.checkpointRef}`
-    if (this.scheduledContinuations.has(latch)) return undefined
-    this.scheduledContinuations.add(latch)
-    return latch
+  private claimContinuationLatch(id: SubjectId, state: ContextProjectionState, checkpoint: ContextCheckpointEntry): boolean {
+    if (checkpoint.turnEndSeq === -1) return false
+    if (continuationDelivered(state, checkpoint.checkpointRef)) return false
+    const latched = this.scheduledContinuations.get(id) ?? new Set<string>()
+    if (latched.has(checkpoint.checkpointRef)) return false
+    latched.add(checkpoint.checkpointRef)
+    this.scheduledContinuations.set(id, latched)
+    return true
+  }
+
+  /**
+   * Release one latch. Called on the scheduling failure path and when the
+   * durable continuation event is observed, which is the moment the projection
+   * stops needing the in-process window.
+   */
+  private releaseContinuationLatch(id: SubjectId, checkpointRef: string): void {
+    const latched = this.scheduledContinuations.get(id)
+    if (latched === undefined) return
+    latched.delete(checkpointRef)
+    // Drop the empty Set as well, so a subject that keeps resolving checkpoints
+    // does not keep one entry per subject id it ever used.
+    if (latched.size === 0) this.scheduledContinuations.delete(id)
+  }
+
+  /**
+   * Release the latches a durable continuation notice just proved delivered.
+   * The projection folds the same event into `continuations`, so this only has
+   * to drop the in-process window the projection cannot see.
+   */
+  private releaseDeliveredContinuations(id: SubjectId, event: SessionEvent & { type: 'user/message' }): void {
+    if (this.scheduledContinuations.size === 0) return
+    const checkpointRef = this.codec.continuationCheckpointRefOf(event.data)
+    if (checkpointRef === undefined) return
+    this.releaseContinuationLatch(id, checkpointRef)
   }
 
   /**
@@ -399,21 +445,21 @@ export class ContextContinuityCoordinator<SubjectId> {
     const state = this.host.projectionForSubject(id, subject.sessionId)
     if (state === undefined) return
     for (const checkpoint of state.checkpoints) {
-      const latch = this.claimContinuationLatch(id, state, checkpoint)
-      if (latch === undefined) continue
+      if (!this.claimContinuationLatch(id, state, checkpoint)) continue
+      const checkpointRef = checkpoint.checkpointRef
       // The continuation waits for true idle, then queues its own turn: the
       // same discipline the rollover path uses (a next-turn message queued
       // while the driver is still converging never latches a wake).
       void agent.whenIdle().then(() => {
         if (this.disposed) return
         try {
-          agent.followup(this.codec.createCheckpointContinuationMessage(checkpoint.checkpointRef))
+          agent.followup(this.codec.createCheckpointContinuationMessage(checkpointRef))
         } catch (error) {
-          this.scheduledContinuations.delete(latch)
+          this.releaseContinuationLatch(id, checkpointRef)
           this.host.log(`context continuation scheduling failed: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
         }
       }, () => {
-        this.scheduledContinuations.delete(latch)
+        this.releaseContinuationLatch(id, checkpointRef)
       })
     }
   }
@@ -492,12 +538,11 @@ export class ContextContinuityCoordinator<SubjectId> {
     const id = this.host.subjectForAgent(agent)?.id
     if (id === undefined) return
     for (const checkpoint of state.checkpoints) {
-      const latch = this.claimContinuationLatch(id, state, checkpoint)
-      if (latch === undefined) continue
+      if (!this.claimContinuationLatch(id, state, checkpoint)) continue
       try {
         agent.followup(this.codec.createCheckpointContinuationMessage(checkpoint.checkpointRef))
       } catch (error) {
-        this.scheduledContinuations.delete(latch)
+        this.releaseContinuationLatch(id, checkpoint.checkpointRef)
         this.host.log(`context continuation repair failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
