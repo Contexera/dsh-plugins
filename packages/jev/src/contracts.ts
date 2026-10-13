@@ -128,11 +128,12 @@ export interface JevScoreAnswer {
 }
 
 /**
- * One answer, discriminated by `type`. Answers are passed through exactly as
- * the vendor sent them: the service validates that the envelope carries an
- * `answers` map of objects, and does not check the members declared here. A
- * decision that turns on a value being present and well-formed — a probability
- * that must exist before a threshold is applied — is the consumer's to make.
+ * One answer, discriminated by `type`. Answers are passed through as the vendor
+ * sent them, with the members declared here verified at runtime and any field
+ * beyond them kept: a caller can rely on the declared members holding, and a
+ * vendor that adds a field does not fail the call. A declared member that is
+ * missing, or not of the declared shape, is a `protocol` failure, so a
+ * malformed answer is never handed to a consumer as a typed success.
  */
 export type JevAnswer = JevChoiceAnswer | JevNoulAnswer | JevScoreAnswer
 

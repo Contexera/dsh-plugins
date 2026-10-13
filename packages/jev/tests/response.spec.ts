@@ -1,7 +1,39 @@
+import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
+import type { JevRequest } from '../src/contracts.ts'
 import { JevError } from '../src/errors.ts'
 import type { JevWireQuestion } from '../src/request.ts'
 import { parseResponse } from '../src/response.ts'
+import { Jev, type JevConfig } from '../src/service.ts'
+import { stubTransport, vendorAnswer } from './stub.ts'
+
+/** The one request the service-level case drives, matching the questions below. */
+const REQUEST: JevRequest = {
+  state: 'the user has been quiet for six hours',
+  questions: { speak: { type: 'noul', instructions: 'should the assistant say something?' } },
+}
+
+/** Let a plugin's loading settle, as the service is registered by an async fiber. */
+const settle = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 0) })
+
+/** Mount the service on its own context, as the service's own tests do. */
+async function mount(config: JevConfig): Promise<Context> {
+  const ctx = new Context()
+  ctx.plugin(Jev, { apiKey: 'test-key', ...config })
+  await settle()
+  return ctx
+}
+
+/** Run a call and return the failure it raised. */
+async function rejection(run: Promise<unknown>): Promise<JevError> {
+  try {
+    await run
+  } catch (error: unknown) {
+    if (error instanceof JevError) return error
+    throw error
+  }
+  throw new Error('expected the call to fail')
+}
 
 const QUESTIONS: Readonly<Record<string, JevWireQuestion>> = {
   speak: { type: 'noul', instructions: 'should the assistant say something?' },
@@ -112,5 +144,126 @@ describe('parseResponse', () => {
 
     expect(error.message).toContain('[redacted]')
     expect(error.message).not.toContain('sk-secret')
+  })
+})
+
+/**
+ * The declared members are this package's promise to a consumer: `noul` is a
+ * probability a threshold can be applied to, and `choice`/`score` carry a
+ * distribution and a confidence. These tests pin that each declared member is
+ * checked, that an extra vendor field is not a failure, and that a malformed
+ * answer never reaches a caller as a typed success.
+ */
+describe('parseResponse answer member validation', () => {
+  const NOUL: Readonly<Record<string, JevWireQuestion>> = {
+    speak: { type: 'noul', instructions: 'should the assistant say something?' },
+  }
+  const CHOICE: Readonly<Record<string, JevWireQuestion>> = {
+    tone: { type: 'choice', instructions: 'which tone?', criteria: { warm: 'warm', terse: null } },
+  }
+  const SCORE: Readonly<Record<string, JevWireQuestion>> = {
+    urgency: { type: 'score', instructions: 'how urgent?', criteria: ['nothing', 'later', 'now'] },
+  }
+
+  /** Parse one answer for one question kind; the outcome rather than a throw. */
+  function outcome(
+    answerBody: unknown,
+    questions: Readonly<Record<string, JevWireQuestion>>,
+  ): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: JevError } {
+    const id = Object.keys(questions)[0]!
+    const text = JSON.stringify({ model: 'jev-1.13.0', answers: { [id]: answerBody } })
+    try {
+      return { ok: true, value: parse(text, questions).answers[id] }
+    } catch (error: unknown) {
+      if (error instanceof JevError) return { ok: false, error }
+      throw error
+    }
+  }
+
+  /** Assert one answer is refused as protocol, naming the answer and the member. */
+  const expectProtocol = (
+    answerBody: unknown,
+    questions: Readonly<Record<string, JevWireQuestion>>,
+    fragment: string,
+  ): void => {
+    const result = outcome(answerBody, questions)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('protocol')
+    expect(result.error.message).toContain(fragment)
+  }
+
+  it('accepts every documented answer that carries its declared members', () => {
+    expect(outcome({ type: 'noul', noul: 0.82 }, NOUL).ok).toBe(true)
+    expect(outcome({ type: 'choice', choice: 'warm', probabilities: { warm: 0.7, terse: 0.3 }, confidence: 0.4 }, CHOICE).ok).toBe(true)
+    expect(outcome({
+      type: 'score', score: 1.5, confidence: 0.4,
+      legend: { 0: 'nothing', 1: 'later', 2: 'now' }, probabilities: { 0: 0.2, 1: 0.4, 2: 0.4 },
+    }, SCORE).ok).toBe(true)
+  })
+
+  it.each([
+    ['noul missing', { type: 'noul' }],
+    ['noul not a number', { type: 'noul', noul: 'high' }],
+    ['noul below 0', { type: 'noul', noul: -0.1 }],
+    ['noul above 1', { type: 'noul', noul: 1.1 }],
+    ['noul not finite', { type: 'noul', noul: Number.NaN }],
+  ])('rejects a noul answer with %s', (_name, answerBody) => {
+    expectProtocol(answerBody, NOUL, 'answer "speak" (noul)')
+  })
+
+  it.each([
+    ['choice missing', { type: 'choice', probabilities: { warm: 1 }, confidence: 0.5 }],
+    ['choice not a string', { type: 'choice', choice: 7, probabilities: { warm: 1 }, confidence: 0.5 }],
+    ['probabilities missing', { type: 'choice', choice: 'warm', confidence: 0.5 }],
+    ['probabilities not an object', { type: 'choice', choice: 'warm', probabilities: 1, confidence: 0.5 }],
+    ['a probability that is not a number', { type: 'choice', choice: 'warm', probabilities: { warm: 'most' }, confidence: 0.5 }],
+    ['a probability above 1', { type: 'choice', choice: 'warm', probabilities: { warm: 1.4 }, confidence: 0.5 }],
+    ['a probability below 0', { type: 'choice', choice: 'warm', probabilities: { warm: -0.2 }, confidence: 0.5 }],
+    ['confidence missing', { type: 'choice', choice: 'warm', probabilities: { warm: 1 } }],
+    ['confidence out of range', { type: 'choice', choice: 'warm', probabilities: { warm: 1 }, confidence: 9 }],
+  ])('rejects a choice answer with %s', (_name, answerBody) => {
+    expectProtocol(answerBody, CHOICE, 'answer "tone" (choice)')
+  })
+
+  it.each([
+    ['score missing', { type: 'score', confidence: 0.4, legend: {}, probabilities: {} }],
+    ['score not a number', { type: 'score', score: 'high', confidence: 0.4, legend: {}, probabilities: {} }],
+    ['score not finite', { type: 'score', score: Number.POSITIVE_INFINITY, confidence: 0.4, legend: {}, probabilities: {} }],
+    ['confidence missing', { type: 'score', score: 1, legend: {}, probabilities: {} }],
+    ['confidence out of range', { type: 'score', score: 1, confidence: 2, legend: {}, probabilities: {} }],
+    ['legend missing', { type: 'score', score: 1, confidence: 0.4, probabilities: {} }],
+    ['legend not an object', { type: 'score', score: 1, confidence: 0.4, legend: [], probabilities: {} }],
+    ['probabilities missing', { type: 'score', score: 1, confidence: 0.4, legend: {} }],
+    ['a probability out of range', { type: 'score', score: 1, confidence: 0.4, legend: {}, probabilities: { 0: 3 } }],
+  ])('rejects a score answer with %s', (_name, answerBody) => {
+    expectProtocol(answerBody, SCORE, 'answer "urgency" (score)')
+  })
+
+  it('keeps a vendor field the declaration does not mention', () => {
+    const result = outcome({ type: 'noul', noul: 0.82, rationale: 'a direct question was asked', latency_ms: 12 }, NOUL)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value).toMatchObject({ noul: 0.82, rationale: 'a direct question was asked', latency_ms: 12 })
+  })
+
+  it('keeps an extra nested field on a choice answer', () => {
+    const result = outcome({
+      type: 'choice', choice: 'warm', probabilities: { warm: 0.7, terse: 0.3 }, confidence: 0.4,
+      vendor_note: { nested: true },
+    }, CHOICE)
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('reports a malformed answer as protocol, which the service never retries', async () => {
+    const stub = stubTransport(() => vendorAnswer({ type: 'noul', noul: 'high' }))
+    const ctx = await mount({ transport: stub.transport })
+
+    const error = await rejection(ctx.jev.decide(REQUEST))
+
+    expect(error.kind).toBe('protocol')
+    expect(stub.count()).toBe(1)
   })
 })

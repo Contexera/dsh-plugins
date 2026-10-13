@@ -88,7 +88,7 @@ Checked, because each is a documented requirement or plainly unusable:
 
 Not checked, because the vendor allows it and this package has no standing to be
 narrower: the prose of an instruction or a description (an empty string and
-`null` are both allowed), and the members inside an answer.
+`null` are both allowed).
 
 ## The response
 
@@ -108,13 +108,21 @@ Anything else is a `protocol` failure rather than a partial result — a caller
 that reads `answers['tone']` must never find it missing, and an answer to a
 different question than the one asked is worse than no answer.
 
-The members *inside* an answer are passed through as the vendor sent them, in
-the vendor's documented shape (`noul`; `choice` with `probabilities` and
-`confidence`; `score` with `legend` and `probabilities`). The service does not
-re-validate them, because validating each member would mean rejecting an answer
-the vendor considers valid. A consumer that turns an answer into a decision —
-applying a threshold to a probability — is the one that guards the member it
-reads.
+The members declared for each answer are checked too, so the types `JevAnswer`
+states hold at runtime:
+
+| Answer | Required members |
+| --- | --- |
+| `noul` | `noul`: a finite number in `0..1` |
+| `choice` | `choice`: a string; `probabilities`: an object of finite numbers in `0..1`; `confidence`: a finite number in `0..1` |
+| `score` | `score` and `confidence`: finite numbers (`confidence` in `0..1`); `legend` and `probabilities`: objects, the probabilities finite numbers in `0..1` |
+
+A missing or malformed member is a `protocol` failure, so a consumer can apply a
+threshold to a probability without re-deriving the vendor's protocol. Fields the
+vendor adds beyond this table are **kept, not rejected**: a passthrough provider
+must not refuse an answer the vendor considers valid, and an extra field is not a
+malformed one. A malformed answer is never retried — repeating a request cannot
+turn a wrong shape into a right one.
 
 ## Retries and cancellation
 
