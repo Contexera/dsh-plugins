@@ -19,9 +19,13 @@
 // Both are read from the pack output rather than from the working tree, so the
 // check tracks `files` and `.npmignore` instead of restating them.
 //
-// The packer is `npm pack`, not `pnpm pack`: `pnpm pack` runs the package's
-// `build` script first, and this gate must report what the manifest ships, not
-// re-derive the `lib/` tree. Run it after `pnpm -r build`, as CI does.
+// The packer is `npm pack` — the command `npm publish` is built on, so the gate
+// reads the file list the registry would actually receive. It is not a read-only
+// probe: `npm pack` runs a `prepack` script when the manifest declares one, and
+// channel-gateway and jev both use `prepack` to build, so packing either of them
+// re-derives its `lib/`. Run it after `pnpm -r build`, as CI does — a package
+// without `prepack` (context-continuity) ships whatever `lib/` that build left,
+// and would otherwise pack no `lib/` at all.
 //
 // `--root <dir>` runs the same checks against another tree (fixtures).
 import { execFileSync } from 'node:child_process'
@@ -64,14 +68,34 @@ function packageDirs() {
 }
 
 /**
+ * The pack command to run, as one `file` plus `args`.
+ *
+ * On Windows the npm entry point is `npm.cmd`, and a `.cmd` file cannot be
+ * started by `execFile`: libuv's PATH search appends only `.com`/`.exe` rather
+ * than reading `PATHEXT`, and Node refuses to launch a `.cmd`/`.bat` without a
+ * shell. The command therefore goes through the interpreter named by
+ * `ComSpec`, which is what a terminal would do. Passing the whole command as one
+ * `/c` argument keeps `shell: true` out of it — that option is deprecated in
+ * combination with an argument list (DEP0190), since the arguments would be
+ * concatenated rather than escaped.
+ */
+function packCommand() {
+  const args = ['pack', '--dry-run', '--json']
+  if (process.platform !== 'win32') return { file: 'npm', args }
+  const interpreter = process.env.ComSpec ?? 'cmd.exe'
+  return { file: interpreter, args: ['/d', '/s', '/c', `npm ${args.join(' ')}`] }
+}
+
+/**
  * The paths `npm publish` would put in the tarball for one package. A pack
  * failure is reported, never thrown, so one broken manifest does not hide the
  * others' results.
  */
 function packedPaths(dir) {
   let stdout
+  const command = packCommand()
   try {
-    stdout = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    stdout = execFileSync(command.file, command.args, {
       cwd: join(root, dir),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -81,7 +105,7 @@ function packedPaths(dir) {
     return []
   }
   const parsed = JSON.parse(stdout)
-  const paths = (Array.isArray(parsed) ? parsed[0] : parsed).files.map(file => file.path)
+  const paths = (Array.isArray(parsed) ? parsed[0] : parsed).files.map(entry => entry.path)
   return paths
 }
 
