@@ -33,6 +33,7 @@
   },
   "files": [
     "lib/**/*",
+    "docs/**/*.md",
     "README.md",
     "README.zh.md"
   ],

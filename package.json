@@ -14,9 +14,10 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "check:peers": "node scripts/check-dsh-peers.mjs",
+    "check:pack": "node scripts/check-pack-contents.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm -r build && changeset publish"
+    "release": "pnpm -r build && pnpm check:pack && changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "3.0.3"

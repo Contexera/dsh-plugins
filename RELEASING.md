@@ -32,6 +32,7 @@ Two rules are not negotiable:
    pnpm install --frozen-lockfile
    pnpm check:peers
    pnpm -r typecheck && pnpm -r test && pnpm -r build
+   pnpm check:pack                # every README-linked document is in the tarball
    pnpm version-packages          # applies bumps, writes each CHANGELOG.md
    ```
 

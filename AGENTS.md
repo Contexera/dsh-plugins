@@ -46,6 +46,7 @@ package — do not merge these scripts.
 ```sh
 pnpm install                 # pnpm workspaces, node >=22
 pnpm check:peers             # the DSH peer contract across packages (offline)
+pnpm check:pack              # every README-linked doc is inside the npm tarball (run after build)
 pnpm -r typecheck            # strict TypeScript, no emit, every package
 pnpm -r test                 # each package's boundary check + unit tests
 pnpm -r build                # emit each package's lib/
