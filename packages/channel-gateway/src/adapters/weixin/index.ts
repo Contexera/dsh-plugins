@@ -625,11 +625,16 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
    * One bounded download: it carries an AbortSignal so a stop or a timeout ends
    * it, and it stops reading at the byte ceiling instead of buffering whatever
    * the host sends.
+   *
+   * `redirect: 'error'` is what keeps the https-only and host-allowlist checks
+   * on the locator meaningful. Those checks run once, against the URL the ref
+   * names; following a redirect would apply them to the first hop only, letting
+   * an allowlisted host hand the download to an internal or plaintext address.
    */
   async function downloadBytes(url: string): Promise<Buffer> {
     const timeout = AbortSignal.timeout(requestTimeoutMs)
     const signal = abort === undefined ? timeout : AbortSignal.any([abort.signal, timeout])
-    const response = await fetchImpl(url, { signal })
+    const response = await fetchImpl(url, { signal, redirect: 'error' })
     if (!response.ok) throw new ChannelGatewayError(`weixin media download was rejected: HTTP ${String(response.status)}`)
     const declared = Number(response.headers?.get?.('content-length') ?? Number.NaN)
     if (Number.isFinite(declared) && declared > maxAttachmentBytes) {

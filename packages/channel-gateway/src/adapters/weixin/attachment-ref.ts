@@ -129,6 +129,13 @@ function macOf(canonical: string, secret: Buffer): string {
  * the descriptor could not be represented; the inbound path uses
  * {@link tryMintAttachmentRef} instead so a hostile provider payload cannot
  * fail message normalization.
+ *
+ * The per-field ceilings bound each field in UTF-16 code units, but a ref is
+ * base64url over the envelope's UTF-8 bytes, so the two do not move together: a
+ * field at its ceiling of multi-byte characters encodes to well over
+ * {@link WEIXIN_REF_MAX_LENGTH}. The minted length is therefore checked here,
+ * against the same ceiling {@link openAttachmentRef} enforces, so this function
+ * can never hand out a ref that its own opener would refuse.
  */
 export function mintAttachmentRef(descriptor: WeixinMediaRef, secret: Buffer): string {
   const normalized = normalizeDescriptor(descriptor)
@@ -137,7 +144,11 @@ export function mintAttachmentRef(descriptor: WeixinMediaRef, secret: Buffer): s
     d: normalized,
     m: macOf(canonicalDescriptor(normalized), secret),
   }
-  return Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')
+  const ref = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')
+  if (ref.length > WEIXIN_REF_MAX_LENGTH) {
+    throw new RefDescriptorError(`descriptor encodes to a ref longer than ${String(WEIXIN_REF_MAX_LENGTH)} characters`)
+  }
+  return ref
 }
 
 /**

@@ -1,7 +1,19 @@
 import { randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { WEIXIN_MAX_TEXT_LENGTH, createWeixinChannel } from '../src/adapters/weixin/index.ts'
 import { encryptAesEcb } from '../src/adapters/weixin/crypto.ts'
+import {
+  WEIXIN_REF_MAX_LENGTH,
+  WEIXIN_REF_MAX_NAME_LENGTH,
+  WEIXIN_REF_MAX_QUERY_LENGTH,
+  WEIXIN_REF_MAX_URL_LENGTH,
+  deriveAttachmentRefSecret,
+  openAttachmentRef,
+  tryMintAttachmentRef,
+  type WeixinMediaRef,
+} from '../src/adapters/weixin/attachment-ref.ts'
 import type { ChannelInbox, InboundMessage } from '../src/contracts.ts'
 import { ChannelGatewayError } from '../src/errors.ts'
 
@@ -519,7 +531,7 @@ describe('weixin attachment refs are authenticated before any network access', (
   async function channelWithMedia(item: unknown, options: {
     readonly attachmentHosts?: readonly string[]
     readonly maxAttachmentBytes?: number
-    readonly download?: (url: string, init?: Parameters<typeof fetch>[1]) => Response
+    readonly download?: (url: string, init?: Parameters<typeof fetch>[1]) => Response | Promise<Response>
   } = {}) {
     const fetched: string[] = []
     const page = { msgs: [{ ...textMessage, item_list: [item] }] }
@@ -677,5 +689,116 @@ describe('weixin attachment refs are authenticated before any network access', (
     const other = createWeixinChannel({ token: 'OTHER', fetch: (async () => { throw new Error('no network') }) as unknown as typeof fetch })
     await expect(other.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
       .rejects.toThrow(/not one this channel minted/)
+  })
+
+  /**
+   * The allowlist and the https-only rule are checked against the locator the
+   * ref names. A redirect moves the download to a URL that was never checked, so
+   * the check is only worth anything if the download refuses to follow one.
+   *
+   * These drive the adapter's real download path against a real server through
+   * the real `fetch` — the earlier download tests inject a scripted transport,
+   * which cannot show what an actual implementation does with a 3xx.
+   */
+  async function withRedirectingServer(run: (entry: string) => Promise<void>): Promise<void> {
+    let targetHits = 0
+    const target = createServer((_request, response) => {
+      targetHits += 1
+      response.writeHead(200)
+      response.end('redirect-target-body')
+    })
+    await new Promise<void>(resolve => { target.listen(0, '127.0.0.1', resolve) })
+    const targetPort = (target.address() as AddressInfo).port
+
+    const entry = createServer((_request, response) => {
+      response.writeHead(302, { location: `http://127.0.0.1:${String(targetPort)}/inner` })
+      response.end()
+    })
+    await new Promise<void>(resolve => { entry.listen(0, '127.0.0.1', resolve) })
+    const entryPort = (entry.address() as AddressInfo).port
+
+    try {
+      await run(`http://127.0.0.1:${String(entryPort)}/start`)
+      expect(targetHits).toBe(0)
+    } finally {
+      entry.close()
+      target.close()
+    }
+  }
+
+  it('reports an item whose ref cannot be represented without a ref, not with an unusable one', async () => {
+    // The inbound contract: a hostile or merely huge provider payload degrades
+    // to an attachment with no download handle. It must not hand out a ref that
+    // `resolveAttachment` would later refuse.
+    //
+    // The locator is exactly at the per-field ceiling (2048 UTF-16 units), so it
+    // is the encoded total — not the field bound — that has to reject it: a URL
+    // of 2048 multi-byte characters encodes to a ref well past 8192.
+    const prefix = 'https://cdn.test/'
+    const huge = `${prefix}${'中'.repeat(WEIXIN_REF_MAX_URL_LENGTH - prefix.length)}`
+    expect(huge.length).toBe(WEIXIN_REF_MAX_URL_LENGTH)
+    const { channel, attachment } = await channelWithMedia(
+      { type: 2, msg_id: 'm-huge', image_item: { media: { full_url: huge } } },
+      { attachmentHosts: ['cdn.test'] },
+    )
+    expect(attachment).toBeDefined()
+    expect(attachment?.ref).toBeUndefined()
+    expect(attachment?.kind).toBe('image')
+
+    // And with no ref, resolution fails as "no ref" rather than as a refused ref.
+    await expect(channel.resolveAttachment?.({ kind: 'image' }))
+      .rejects.toThrow(/without a ref/)
+  })
+
+  it('does not follow a redirect out of the host and scheme the ref was checked against', async () => {
+    await withRedirectingServer(async entry => {
+      const { channel, attachment } = await channelWithMedia(imageItem, {
+        attachmentHosts: ['cdn.test'],
+        // The platform fetch, pointed at the local entry server. The adapter
+        // chose the URL from a signed ref; only the transport is redirected to
+        // the test server, so the redirect itself is genuine.
+        download: (url, init) => fetch(String(url).replace('https://cdn.test/enc', entry), init),
+      })
+      const resolved = channel.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! })
+      await expect(resolved).rejects.toThrow(/download failed/)
+    })
+  })
+})
+
+/**
+ * A field ceiling is counted in UTF-16 code units, but a ref is base64url over
+ * the envelope's UTF-8 bytes, so a field full of multi-byte characters encodes
+ * to a ref several times longer than the field. Minting and opening therefore
+ * have to agree on one ceiling: a ref this channel hands out is worthless if its
+ * own opener refuses it.
+ */
+describe('a minted ref is always one this channel can open', () => {
+  const secret = deriveAttachmentRefSecret('TOKEN')
+
+  /** Descriptors that fill one or more fields to its documented ceiling. */
+  const extremeDescriptors: readonly (readonly [string, WeixinMediaRef])[] = [
+    ['an ascii url at the ceiling', { k: 'image', u: `https://cdn.test/${'a'.repeat(WEIXIN_REF_MAX_URL_LENGTH - 18)}` }],
+    ['a multi-byte url at the ceiling', { k: 'image', u: `https://cdn.test/${'中'.repeat(WEIXIN_REF_MAX_URL_LENGTH - 18)}` }],
+    ['an astral url at the ceiling', { k: 'image', u: `https://cdn.test/${'😀'.repeat(WEIXIN_REF_MAX_URL_LENGTH - 18)}` }],
+    ['a multi-byte query at the ceiling', { k: 'image', e: '中'.repeat(WEIXIN_REF_MAX_QUERY_LENGTH) }],
+    ['a multi-byte name at the ceiling', { k: 'file', n: '中'.repeat(WEIXIN_REF_MAX_NAME_LENGTH) }],
+    ['every field at its ceiling', {
+      k: 'file',
+      u: `https://cdn.test/${'中'.repeat(WEIXIN_REF_MAX_URL_LENGTH - 18)}`,
+      e: '中'.repeat(WEIXIN_REF_MAX_QUERY_LENGTH),
+      a: '中'.repeat(WEIXIN_REF_MAX_NAME_LENGTH),
+      h: '中'.repeat(WEIXIN_REF_MAX_NAME_LENGTH),
+      n: '中'.repeat(WEIXIN_REF_MAX_NAME_LENGTH),
+    }],
+  ]
+
+  it('either refuses to mint an over-long ref or mints one the opener accepts', () => {
+    for (const [label, descriptor] of extremeDescriptors) {
+      const ref = tryMintAttachmentRef(descriptor, secret)
+      if (ref === undefined) continue
+      expect(ref.length, `${label} minted ${String(ref.length)} characters`).toBeLessThanOrEqual(WEIXIN_REF_MAX_LENGTH)
+      // The point of the ceiling: whatever mint accepted, open must accept too.
+      expect(() => openAttachmentRef(ref, secret, descriptor.k), label).not.toThrow()
+    }
   })
 })

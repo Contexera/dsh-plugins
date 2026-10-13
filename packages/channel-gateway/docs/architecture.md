@@ -259,12 +259,19 @@ caller-supplied `kind` before it fetches anything, and a ref that fails any of
 them raises `ChannelGatewayError` with no request made. A verified locator must
 then be `https:` and its host must be one of `attachmentHosts` (default: the
 configured CDN host plus the iLink CDN); the download carries an `AbortSignal`
-and stops at `maxAttachmentBytes`. The MAC key derives from the bot token, so a
+and stops at `maxAttachmentBytes`. The download does not follow redirects: those
+two rules are checked against the URL the ref names, so following a `3xx` would
+apply them to the first hop only and let an allowlisted host hand the transfer to
+an address that was never checked. The MAC key derives from the bot token, so a
 token rotation invalidates refs minted under the old one; `attachmentRefSecret`
 pins a stable key when refs must outlive a rotation. A descriptor that cannot be
 represented within the field bounds is reported as an attachment with no `ref`,
 because provider fields arrive unbounded and a hostile payload must not fail the
-message it arrived in.
+message it arrived in. The same degradation covers a descriptor that passes every
+per-field bound but encodes to a ref longer than `WEIXIN_REF_MAX_LENGTH`: the
+per-field ceilings count UTF-16 code units while the ref is base64url over UTF-8
+bytes, so minting checks the encoded length against the ceiling the opener
+enforces. A ref this channel hands out is therefore always one it can open.
 
 ## Host compatibility
 
