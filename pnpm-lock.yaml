@@ -41,8 +41,8 @@ importers:
         version: 4.6.5
     devDependencies:
       '@contexera/dsh-jev':
-        specifier: 0.1.2
-        version: 0.1.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)
+        specifier: 0.1.3
+        version: 0.1.3(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)
       '@deepseek-ai/cordis':
         specifier: 4.0.4
         version: 4.0.4
@@ -172,8 +172,8 @@ packages:
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
 
-  '@contexera/dsh-jev@0.1.2':
-    resolution: {integrity: sha512-4ZTfonJYq5anDkTKRjCyhoyttRukEsw2T1T/mflikaunMLyadKR6/P9JJ9mcV8/jS6LriFXNcdRda7Nfj4ac3Q==}
+  '@contexera/dsh-jev@0.1.3':
+    resolution: {integrity: sha512-ay1LhPhiPSGkWa/PlkhCI1PNPQb3nTurPmOcM0xLAqdWudwF1hQ0s1wRVh50FlDKsqOsSIXFxP06VZg0JUBZcA==}
     engines: {node: '>=22'}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
@@ -1090,7 +1090,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@contexera/dsh-jev@0.1.2(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)':
+  '@contexera/dsh-jev@0.1.3(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/schemastery@3.18.4)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.4
       '@deepseek-ai/schemastery': 3.18.4

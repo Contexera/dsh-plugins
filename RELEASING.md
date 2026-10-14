@@ -34,9 +34,26 @@ Two rules are not negotiable:
    pnpm -r typecheck && pnpm -r test && pnpm -r build
    pnpm check:pack                # every README-linked document is in the tarball
    pnpm version-packages          # applies bumps, writes each CHANGELOG.md
+   pnpm install --frozen-lockfile # again: versioning can move an internal pin
    ```
 
    Read the version diff and the new changelog sections, then commit them.
+
+   **Re-check the lockfile after versioning, because versioning rewrites
+   manifests.** `updateInternalDependencies` moves an in-repo dependency onto the
+   version being released — the `devDependencies` pin and the matching peer range
+   — so the tree the first install verified is not the tree being committed.
+   Running the frozen install only before `version-packages` is how a release
+   commit reaches CI with a stale lockfile: both lanes die in step 1, and nothing
+   gets tagged.
+
+   **When that dependency is not on the registry yet, the lockfile cannot be
+   resolved at all** — an in-repo dependency resolves from the registry, not as a
+   workspace link, so `pnpm install` fails with `ERR_PNPM_NO_MATCHING_VERSION`
+   until it is published. Publish the leaf package first, refresh the lockfile,
+   then push the commit CI is meant to validate. Publishing in dependency order
+   changes no published byte: no package ships the lockfile, and the tarball comes
+   from the same source tree.
 
 3. **Push the release commit behind a fence.** Both CI lanes must pass before
    anything is tagged:
