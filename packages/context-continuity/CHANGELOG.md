@@ -1,5 +1,51 @@
 # @contexera/dsh-context-continuity
 
+## 0.4.1
+
+### Patch Changes
+
+- [中文](#cn-v0-4-1) | [English](#en-v0-4-1)
+
+  <h3 id="cn-v0-4-1">中文</h3>
+
+  **改了什么**
+
+  - 修复 checkpoint 续接闩锁的生命周期：闩锁按 subject 释放，不再只增不减。原先的键是拼接串，subject `team:a` + ref `b:checkpoint` 与 subject `team:a:b` + ref `checkpoint` 会撞成同一个键，后一次续接被当成重复而静默抑制；`stopTracking` 与 `dispose` 也不清理它。
+  - 闩锁改为按 subject 分组存放 checkpoint ref 本身，在续接事件落盘、调度抛错、subject 停止跟踪、`dispose()` 四处释放；空集合一并丢弃。
+  - 架构文档随 npm tarball 一起发布：README 链接的 `docs/` 此前不在 `files` 里，装包的人点进去是空路径。新增 `pnpm check:pack` 门禁按 `npm publish` 的方式打包并检查 README 与文档里的每个链接，CI 在 `pnpm -r build` 后运行，`pnpm release` 在 `changeset publish` 前运行。
+
+  **兼容性**
+
+  - DSH 声明线不变：`>=0.2.0-rc.1 <0.2.1`。
+  - 入口、子路径与导出都不变；本次无破坏性变更。
+  - 可选 peer `@contexera/dsh-jev` 随本轮升到 `^0.1.3`。
+
+  **验证**
+
+  - 本地：`pnpm -r typecheck`、`pnpm -r test`（10 个文件 / 344 条测试）、`pnpm -r build` 全过，`check:peers` 与 `check:pack` 通过。
+
+  ```sh
+  npm i @contexera/dsh-context-continuity@0.4.1
+  ```
+
+  <h3 id="en-v0-4-1">English</h3>
+
+  **What changed**
+
+  - Fixed the lifetime of checkpoint-continuation latches: they are released by subject instead of only ever growing. The key was a concatenated string, so subject `team:a` with ref `b:checkpoint` and subject `team:a:b` with ref `checkpoint` collided, and the second continuation was silently suppressed as a duplicate; `stopTracking` and `dispose` did not clear it either.
+  - Latches now hold the checkpoint ref itself, grouped per subject, and are released when the continuation event is observed, when scheduling throws, when the subject stops being tracked, and on `dispose()`; an emptied set is dropped too.
+  - The architecture documents now ship in the npm tarball: the `docs/` pages the README links were not in `files`, so an installed reader followed a link to a path that did not exist. The new `pnpm check:pack` gate packs each package the way `npm publish` would and checks every link in a README or document; CI runs it after `pnpm -r build` and `pnpm release` runs it before `changeset publish`.
+
+  **Compatibility**
+
+  - The DSH line is unchanged: `>=0.2.0-rc.1 <0.2.1`.
+  - Entries, subpaths and exports are unchanged; nothing here is breaking.
+  - The optional peer `@contexera/dsh-jev` moves to `^0.1.3` in this round.
+
+  **Verification**
+
+  - Local: `pnpm -r typecheck`, `pnpm -r test` (10 files / 344 tests) and `pnpm -r build` pass, and `check:peers` and `check:pack` hold.
+
 ## 0.4.0
 
 ### Minor Changes

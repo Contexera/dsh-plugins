@@ -1,5 +1,53 @@
 # @contexera/dsh-jev
 
+## 0.1.3
+
+### Patch Changes
+
+- [中文](#cn-v0-1-3) | [English](#en-v0-1-3)
+
+  <h3 id="cn-v0-1-3">中文</h3>
+
+  **改了什么**
+
+  - 应答解析改为校验 `JevAnswer` 声明的成员，而不只是信封和 `type` 标签。原先 `{ type: 'noul', noul: 'high' }` 会作为一条类型正确的成功结果交给调用方，直到阈值计算时才炸。
+  - 现在逐项校验：`noul` 是 `0..1` 的有限数；`choice` 带字符串 `choice`、`0..1` 的有限概率对象与有限 `confidence`；`score` 带有限 `score`/`confidence`，以及值为 `0..1` 有限数的 `legend` 与 `probabilities`。成员缺失或形状不对即 `protocol` 失败，不重试。
+  - 声明之外的字段照旧保留，厂商认为合法的应答不会被透传提供方拒绝。
+  - 架构文档随 npm tarball 一起发布：README 链接的 `docs/` 此前不在 `files` 里，装包的人点进去是空路径。新增 `pnpm check:pack` 门禁按 `npm publish` 的方式打包并检查 README 与文档里的每个链接，CI 在 `pnpm -r build` 后运行，`pnpm release` 在 `changeset publish` 前运行。
+
+  **兼容性**
+
+  - 本包不声明 DSH peer，这条关系不变。
+  - 入参、出参与配置键都不变；本次收紧的是畸形应答的处理。
+  - `@contexera/dsh-context-continuity` 里指向本包的可选 peer 随本轮升到 `^0.1.3`。
+
+  **验证**
+
+  - 本地：`pnpm -r typecheck`、`pnpm -r test`（6 个文件 / 81 条测试）、`pnpm -r build` 全过，`check:peers` 与 `check:pack` 通过。
+
+  ```sh
+  npm i @contexera/dsh-jev@0.1.3
+  ```
+
+  <h3 id="en-v0-1-3">English</h3>
+
+  **What changed**
+
+  - The response parser now validates the members a `JevAnswer` declares, not just its envelope and `type` tag. `{ type: 'noul', noul: 'high' }` used to reach a caller as a typed success and only fail later, at the point a threshold was applied.
+  - Each member is checked: `noul` is a finite number in `0..1`; `choice` carries a string `choice`, an object of finite probabilities in `0..1` and a finite `confidence`; `score` carries finite `score`/`confidence` plus `legend` and `probabilities` whose values are finite numbers in `0..1`. A missing or malformed member is a `protocol` failure, never retried.
+  - Fields beyond the declaration are still kept, so a passthrough provider does not refuse an answer the vendor considers valid.
+  - The architecture documents now ship in the npm tarball: the `docs/` pages the README links were not in `files`, so an installed reader followed a link to a path that did not exist. The new `pnpm check:pack` gate packs each package the way `npm publish` would and checks every link in a README or document; CI runs it after `pnpm -r build` and `pnpm release` runs it before `changeset publish`.
+
+  **Compatibility**
+
+  - This package declares no DSH peers; that relationship is unchanged.
+  - Inputs, outputs and configuration keys are unchanged; what tightened is how malformed answers are handled.
+  - The optional peer naming it inside `@contexera/dsh-context-continuity` moves to `^0.1.3` in this round.
+
+  **Verification**
+
+  - Local: `pnpm -r typecheck`, `pnpm -r test` (6 files / 81 tests) and `pnpm -r build` pass, and `check:peers` and `check:pack` hold.
+
 ## 0.1.2
 
 ### Patch Changes

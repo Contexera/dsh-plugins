@@ -1,6 +1,6 @@
 {
   "name": "@contexera/dsh-context-continuity",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A subject's context lived as one continuous timeline across many physical Sessions: rollover, checkpoints, and lineage.",
   "license": "MIT",
   "repository": {
@@ -54,7 +54,7 @@
     "@deepseek-ai/dsh-session-projection": ">=0.2.0-rc.1 <0.2.1",
     "@deepseek-ai/dsh-session-query": ">=0.2.0-rc.1 <0.2.1",
     "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.2.1",
-    "@contexera/dsh-jev": "^0.1.2"
+    "@contexera/dsh-jev": "^0.1.3"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-query": {
@@ -76,7 +76,7 @@
     "@deepseek-ai/dsh-session-query": "0.2.0-rc.1",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.1",
     "@types/node": "^24.0.0",
-    "@contexera/dsh-jev": "0.1.2",
+    "@contexera/dsh-jev": "0.1.3",
     "typescript": "^5.8.3",
     "vitest": "^4.1.8"
   },
