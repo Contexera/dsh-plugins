@@ -69,6 +69,11 @@ function turnStart(seq: number, idleMs: number): SessionEvent {
   return { type: 'turn/start', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1 } } as unknown as SessionEvent
 }
 
+/** One `step/start`: the durable record that a step of the current turn has already opened. */
+function stepStart(seq: number, idleMs: number): SessionEvent {
+  return { type: 'step/start', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1, step: 1 } } as unknown as SessionEvent
+}
+
 /** One `turn/end`: the durable record that a generation finished its turn here. */
 function turnEnd(seq: number, idleMs: number): SessionEvent {
   return { type: 'turn/end', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1, reason: { kind: 'completed' } } } as unknown as SessionEvent
@@ -690,6 +695,36 @@ describe('the long-gap relatedness gate', () => {
     expect(noticeText(instruction)).toContain('context_rollover')
     expect(noticeText(instruction)).toContain('what is the status of the release?')
     expect(host.logs.some(entry => entry.message.includes('the step is held for one rollover'))).toBe(true)
+  })
+
+  it('an input arriving mid-turn is not a long gap, so the judge is never asked', async () => {
+    // A turn the previous input opened is still running: the loop has already
+    // written this turn's `step/start` before a later pre-step runs, so the
+    // generation finished no turn before this arrival — it never went away.
+    // Reading the gap from the last `turn/end` would hold work the subject is
+    // in the middle of, which is the opposite of the gate's idle boundary.
+    const host = gated()
+    host.log = span('session-1', 0,
+      turnStart(0, 45 * 60_000), turnEnd(1, 45 * 60_000),
+      turnStart(2, 10_000), stepStart(3, 5_000),
+    )
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('continue')
+    expect(host.judgeCalls).toEqual([])
+  })
+
+  it('a turn that ended after the mid-turn one re-arms the gap, and it is measured from that later turn', async () => {
+    // The mid-turn case must not latch: a later `turn/end` means the generation
+    // did retire after all, and the gate reads the gap from the newest one.
+    const host = gated()
+    host.log = span('session-1', 0,
+      turnStart(0, 60 * 60_000), turnEnd(1, 60 * 60_000),
+      turnStart(2, 45 * 60_000), stepStart(3, 40 * 60_000), turnEnd(4, 45 * 60_000),
+      turnStart(5, 0),
+    )
+    const decision = await policyFor(host).onPreStep('subject-1', signal())
+    expect(decision.kind).toBe('hold')
+    expect(host.judgeCalls).toHaveLength(1)
   })
 
   it('measures the gap from the turn the generation finished, not the turn the arrival opened', async () => {

@@ -543,14 +543,27 @@ export class ContextPressurePolicy<SubjectId> {
    * opening, so that event is the generation retiring to idle. Undefined when no
    * turn has completed in the span: an unmeasurable gap is not a long gap, and
    * the gate stays off.
+   *
+   * A turn that has already opened a step is not idle either. Input can arrive
+   * mid-turn — steered into a running turn, claimed by a later pre-step — and
+   * that turn's `step/start` precedes this policy, so the anchor must respect
+   * it: the generation is in the middle of working, and the newest `turn/end`
+   * is the last turn it finished, not when it stopped. Undefined in that case
+   * too, so the gate never rolls a generation over while it is still running.
    */
   private idleMsFor(subject: SubjectId): number | undefined {
     const events = this.host.logSpanFor(subject).events
-    const lastTurnEnd = events.reduce<SessionEvent | undefined>(
-      (newest, event) => (event.type === 'turn/end' ? event : newest),
-      undefined,
-    )
-    if (lastTurnEnd === undefined) return undefined
+    let lastTurnEnd: SessionEvent | undefined
+    let stepOpened = false
+    for (const event of events) {
+      if (event.type === 'turn/end') {
+        lastTurnEnd = event
+        stepOpened = false
+      } else if (event.type === 'step/start' && lastTurnEnd !== undefined) {
+        stepOpened = true
+      }
+    }
+    if (lastTurnEnd === undefined || stepOpened) return undefined
     return Date.now() - lastTurnEnd.time
   }
 

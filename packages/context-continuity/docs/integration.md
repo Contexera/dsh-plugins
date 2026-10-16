@@ -619,6 +619,10 @@ The absence is read from the durable log — the newest `turn/end` is when the
 generation last stopped working, and the arriving turn's own `turn/start` is
 already in that log before this policy runs, so it cannot stand in for the gap.
 A span with no completed turn has no measurable gap, and the gate stays off.
+Input can also arrive mid-turn — steered into a running turn and claimed by a
+later pre-step — and a turn whose `step/start` is already in the log is work in
+progress, not a return: that span has no measurable gap either, so the gate
+never rolls a generation over while it is still running.
 An unrelated answer holds the step and steers one instruction to roll over, so
 the work continues in a fresh generation seeded by a handoff written for that
 input. Two optional host members switch the gate on; omit either and the gate
