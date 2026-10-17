@@ -1,10 +1,6 @@
 /**
  * The gateway service: register channels, authorize inbound, announce
  * `channel/inbound`, send outbound.
- *
- * It does not interpret messages: what a message means, where it goes next and
- * whether it was seen before are decided by whoever listens to the event or
- * calls {@link ChannelGateway.send}.
  * @module @contexera/dsh-channel-gateway/gateway
  */
 
@@ -44,14 +40,12 @@ declare module '@deepseek-ai/cordis' {
 
 /** How a gateway is built; the plugin row supplies it. */
 export interface ChannelGatewayConfig {
-  /** The authorization policy. Omitted means an empty allowlist: nobody. */
   readonly auth?: ChannelAuth
 }
 
 export class ChannelGateway extends Service {
   private readonly registered = new Map<string, Channel>()
   private readonly auth: ChannelAuth
-  /** The one durable acceptance seam, or none while the gateway only announces. */
   private sink: ChannelInboundSink | undefined
 
   constructor(ctx: Context, config: ChannelGatewayConfig = {}) {
@@ -153,14 +147,7 @@ export class ChannelGateway extends Service {
   /**
    * Take one message a channel reported: prove it belongs to that channel,
    * authorize it, then hand it to the sink when one is registered and announce
-   * it. A message that fails ownership or authorization is dropped here, where
-   * the gateway can still see why — a channel never decides who may speak.
-   *
-   * Dropping a message resolves: refusing it is a decision about that message,
-   * and an adapter that re-read it would only be refused again. A sink
-   * rejection is the opposite — a transient failure to accept — so it
-   * propagates to the adapter, which must then leave its provider cursor where
-   * it was and let the provider hand the message over again.
+   * it.
    */
   private async accept(owner: string, message: InboundMessage): Promise<void> {
     if (message.channel !== owner) {
@@ -183,8 +170,6 @@ export class ChannelGateway extends Service {
       this.report('info', `channel "${owner}" dropped a message from actor "${message.actor.id}": not authorized`)
       return
     }
-    // Acceptance precedes the announcement, so a listener never sees a message
-    // that is not durable yet.
     const sink = this.sink
     if (sink !== undefined) await sink.accept(message)
     this.ctx.emit('channel/inbound', message)

@@ -1,14 +1,5 @@
-/**
- * The one error type the gateway raises for a caller's mistake, plus the
- * message extraction every adapter needs when it reports a failure.
- * @module @contexera/dsh-channel-gateway/errors
- */
+import { inspect } from 'node:util'
 
-/**
- * A rejected gateway operation: an unknown or duplicate channel, a route the
- * named channel never minted, or a message the channel cannot carry. It is the
- * caller's mistake, not a transport failure, and the message says which.
- */
 export class ChannelGatewayError extends Error {
   constructor(message: string) {
     super(message)
@@ -16,13 +7,8 @@ export class ChannelGatewayError extends Error {
   }
 }
 
-/** One line of text for any thrown value, so a log line never reads `[object Object]`. */
 export function errorText(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
-  try {
-    return JSON.stringify(error) ?? String(error)
-  } catch {
-    return String(error)
-  }
+  return inspect(error, { breakLength: Infinity, compact: true, depth: 2 })
 }

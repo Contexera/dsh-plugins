@@ -18,10 +18,6 @@ type Responder = (
   signal: AbortSignal | undefined,
 ) => unknown
 
-/**
- * A Bot API stand-in: every call is recorded, every answer is scripted.
- * A responder returns the `result` value; the envelope is the fake's business.
- */
 function fakeTelegram(respond: Responder) {
   const calls: RecordedCall[] = []
   const impl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -64,13 +60,6 @@ function pollOnce(updates: readonly unknown[], botIdentity: Responder): Responde
   }
 }
 
-/**
- * A Bot API that keeps re-serving `updates` until the offset it is given has
- * passed them, the way the real one re-sends everything at or after that offset.
- * A test can therefore see whether a delivery that failed was re-handed-over or
- * silently skipped. After `resends` re-servings it waits for stop, so a test that
- * keeps failing a delivery does not spin the loop at full speed while it asserts.
- */
 function resendingTelegram(updates: readonly Record<string, unknown>[], botIdentity: Responder): Responder {
   let resends = 0
   return (method, body, signal) => {
@@ -283,8 +272,6 @@ describe('telegram channel', () => {
       log: { info: () => {}, error: message => { logged.push(message) } },
     })
 
-    // A transport failure is transient: start retries rather than rejecting, and
-    // the retry it logs must never quote the token back.
     void channel.start({ deliver: async () => {} })
     await waitFor(() => logged.some(message => /getMe failed/.test(message)))
     await channel.stop()
@@ -303,14 +290,12 @@ describe('telegram channel', () => {
       const signal = (init as RequestInit | undefined)?.signal ?? undefined
       if (method === 'getMe') {
         getMeCalls += 1
-        // The proxy is not up yet on the first attempts.
         if (getMeCalls < 3) throw new Error('fetch failed')
         return okResponse({ id: 1, username: 'the-bot' })
       }
       if (method === 'getUpdates') {
         polls += 1
         if (polls === 1) return okResponse([privateMessage])
-        // Later polls hang until stop aborts, like a real long poll with nothing to return.
         await new Promise<void>(resolve => { signal?.addEventListener('abort', () => { resolve() }, { once: true }) })
         throw new Error('aborted')
       }
@@ -323,7 +308,6 @@ describe('telegram channel', () => {
     await waitFor(() => seen.length > 0)
     await channel.stop()
 
-    // It kept trying instead of failing the channel, then delivered once connected.
     expect(getMeCalls).toBeGreaterThanOrEqual(3)
     expect(seen[0]?.text).toBe('hello there')
   })
@@ -336,7 +320,6 @@ describe('telegram channel', () => {
     }) as unknown as typeof fetch
     const channel = createTelegramChannel({ token: 'BAD', fetch: impl, retryDelayMs: 1 })
 
-    // A 4xx rejection is not transient: the start fails once, it does not spin.
     await expect(channel.start({ deliver: async () => {} })).rejects.toThrow(/Unauthorized/)
     expect(getMeCalls).toBe(1)
   })
@@ -379,7 +362,6 @@ describe('telegram channel', () => {
       }
       if (method === 'getUpdates') {
         polls += 1
-        // Hang until the watchdog (or stop) aborts, mimicking a wedged socket.
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
         })
@@ -433,9 +415,6 @@ describe('telegram channel', () => {
     })
 
     expect(result.providerMessageId).toBe('9')
-    // The paired `FormData`, not the global one: an injected fetch cannot tell
-    // the two apart, so this assertion is about which class the adapter builds
-    // with, and the socket-level test below is the one that catches a mismatch.
     expect(uploaded instanceof PairedFormData).toBe(true)
     const form = uploaded as InstanceType<typeof PairedFormData>
     expect(form.get('chat_id')).toBe('1')
@@ -446,7 +425,6 @@ describe('telegram channel', () => {
     const bytes = new Uint8Array([1, 2, 3, 4, 5])
     await withRealBotApi(async (apiBaseUrl, requests) => {
       const upload = async (): Promise<void> => {
-        // No injected fetch: this drives the adapter's own transport choice.
         const channel = createTelegramChannel({ token: 'T', apiBaseUrl })
         const result = await channel.send({
           channel: 'telegram',
@@ -459,9 +437,6 @@ describe('telegram channel', () => {
 
       const noProxy = { HTTPS_PROXY: undefined, HTTP_PROXY: undefined, https_proxy: undefined, http_proxy: undefined }
       await withProxyEnv(noProxy, upload)
-      // The shape every proxied deployment runs: a proxy variable is set, and
-      // loopback is exempt. Pointing it at a dead port also proves the upload
-      // was not proxied, so reaching the server at all is part of the assertion.
       await withProxyEnv(
         { ...noProxy, HTTPS_PROXY: 'http://127.0.0.1:1', NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' },
         upload,
@@ -473,7 +448,6 @@ describe('telegram channel', () => {
         expect(request.body.includes(Buffer.from('name="document"'))).toBe(true)
         expect(request.body.includes(Buffer.from('filename="a.txt"'))).toBe(true)
         expect(request.body.includes(Buffer.from(bytes))).toBe(true)
-        // What the mismatched-FormData failure looked like: a 17-byte text body.
         expect(request.body.includes(Buffer.from('[object FormData]'))).toBe(false)
       }
     })
@@ -506,10 +480,8 @@ describe('telegram channel', () => {
       attachments: [{ kind: 'file', name: 'a.txt', data: new Uint8Array([1, 2, 3]) }],
     }).catch((error: unknown) => error)
 
-    // The text is already in the chat, so a caller must be told not to resend it.
     expect(String(failure)).toContain('delivered the text as message 371')
     expect(String(failure)).toContain('attachment 1 of 1')
-    // A rejection the provider means is not retried, so the text went out once.
     expect(calls).toEqual(['sendMessage', 'sendDocument'])
   })
 })
@@ -548,12 +520,10 @@ describe('telegram delivery durability', () => {
         }
       },
     })
-    // The page came back and was accepted the second time, so the offset may move.
     await waitFor(() => attempts.length >= 2)
     await waitFor(() => calls.filter(call => call.method === 'getUpdates' && call.body?.['offset'] !== undefined).length > 0, 1000)
     await channel.stop()
 
-    // The message was handed over again rather than skipped: never a gap.
     expect(attempts).toEqual(['5', '5'])
     expect(calls.filter(call => call.method === 'getUpdates')[1]?.body).not.toMatchObject({ offset: 11 })
   })
@@ -576,8 +546,6 @@ describe('telegram delivery durability', () => {
     await waitFor(() => attempts.length >= 3, 1000)
     await channel.stop()
 
-    // The first message is re-delivered even though it was accepted the first
-    // time — the sink is expected to be idempotent — and neither is skipped.
     expect(attempts.slice(0, 3)).toEqual(['5', '6', '5'])
     const offsets = calls.filter(call => call.method === 'getUpdates').map(call => call.body?.['offset'])
     expect(offsets).not.toContain(13)
@@ -594,8 +562,6 @@ describe('telegram delivery durability', () => {
     await waitFor(() => calls.filter(call => call.method === 'getUpdates').length >= 2)
     await channel.stop()
 
-    // Re-reading an update this adapter cannot normalize forever would block
-    // everything behind it, so the offset still moves past it.
     expect(calls.filter(call => call.method === 'getUpdates')[1]?.body).toMatchObject({ offset: 21 })
   })
 })

@@ -6,8 +6,7 @@
  * after it, image links render as nothing useful, and `~~` and deep headers are
  * not supported. This module removes or neutralizes those constructs and splits
  * the result so no chunk exceeds the per-message limit or leaves a fenced code
- * block open. Like the Telegram renderer it is transport fidelity, asked for per
- * message through {@link OutboundMessage.format}; the rules follow nanobot (MIT).
+ * block open. The rules follow nanobot (MIT).
  * @module @contexera/dsh-channel-gateway/adapters/weixin-markdown
  */
 
@@ -18,7 +17,6 @@
  */
 export function sanitizeWeixinMarkdown(content: string): string {
   if (content === '') return content
-  // Odd indices are code regions the split preserved; even indices are text.
   const parts = content.split(/(```[\s\S]*?```|`[^`\n]*`)/)
   for (let index = 0; index < parts.length; index += 2) {
     parts[index] = (parts[index] ?? '')
@@ -46,7 +44,7 @@ export function splitWeixinMarkdown(content: string, maxLen: number): string[] {
   let inFence = false
   while (remaining !== '') {
     const prefix = inFence ? '```\n' : ''
-    const suffixBudget = 4 // room for a trailing "\n```" when a slice leaves a fence open
+    const suffixBudget = 4
     const available = maxLen - prefix.length - suffixBudget
     if (available <= 0) return [sanitized]
 

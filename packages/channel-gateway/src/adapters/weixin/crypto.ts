@@ -21,12 +21,6 @@ export function parseAesKey(keyB64: string): Buffer {
   throw new Error(`aes key must decode to 16 raw bytes or a 32-char hex string, got ${String(decoded.length)} bytes`)
 }
 
-/**
- * Decrypt CDN media. Data that is not a whole number of blocks cannot be ECB
- * ciphertext, so it is returned untouched; otherwise the PKCS7 padding is
- * removed only when it is valid, matching the reference client's tolerance for
- * media that was stored without it.
- */
 export function decryptAesEcb(data: Buffer, keyB64: string): Buffer {
   if (data.length === 0 || data.length % 16 !== 0) return data
   const decipher = createDecipheriv('aes-128-ecb', parseAesKey(keyB64), null)
@@ -35,7 +29,6 @@ export function decryptAesEcb(data: Buffer, keyB64: string): Buffer {
   return pkcs7UnpadSafe(decrypted)
 }
 
-/** Encrypt bytes for CDN upload; Node applies PKCS7 padding to the block size. */
 export function encryptAesEcb(data: Buffer, keyB64: string): Buffer {
   const cipher = createCipheriv('aes-128-ecb', parseAesKey(keyB64), null)
   return Buffer.concat([cipher.update(data), cipher.final()])

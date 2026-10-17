@@ -5,8 +5,7 @@
  * The plugin registers {@link ChannelGateway} as `ctx.channels`. A channel
  * adapter normalizes its provider into {@link InboundMessage}, the gateway
  * authorizes it and announces `channel/inbound`, and a consumer sends through
- * `ctx.channels.send` with a route it saw inbound. Deduplication, session
- * mapping, streaming and agent access are implemented above this layer.
+ * `ctx.channels.send` with a route it saw inbound.
  *
  * Channel adapters live behind their own entries: `./telegram` and `./weixin`.
  * @module @contexera/dsh-channel-gateway
@@ -19,7 +18,6 @@ import { ChannelGateway } from './gateway.ts'
 
 export const name = 'dsh-channel-gateway'
 
-/** The gateway plugin row's own configuration: who may speak. */
 export interface GatewayPluginConfig {
   /**
    * Authorized actors, as `channel:actorId`; `channel:*` admits one channel's

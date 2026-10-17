@@ -2,10 +2,8 @@
  * Telegram: a long-polling channel adapter over the Bot API.
  *
  * It normalizes updates into {@link InboundMessage} and sends {@link
- * OutboundMessage} back. Commands, conversation-to-session mapping, streaming
- * and reply policy are implemented above it, from `channel/inbound`. The
- * transport is adapted from `dsh-telegram-channel` (MIT), reduced to the Bot
- * API calls this adapter needs.
+ * OutboundMessage} back. The transport is adapted from `dsh-telegram-channel`
+ * (MIT), reduced to the Bot API calls this adapter needs.
  * @module @contexera/dsh-channel-gateway/telegram
  */
 
@@ -38,7 +36,6 @@ import { splitText } from '../text.ts'
 /** Telegram's own limit for one message's text. */
 export const TELEGRAM_MAX_TEXT_LENGTH = 4096
 
-/** Ceiling for the opening connect's exponential backoff, so a long outage settles into a steady retry. */
 const CONNECT_MAX_DELAY_MS = 30_000
 
 interface TelegramUser {
@@ -124,15 +121,12 @@ class TelegramApiError extends Error {
 /**
  * Whether a failure is transient — a transport error, a 5xx, or a 429 rate
  * limit — rather than a rejection the API means (a bad token, some other 4xx).
- * Both the send retry and the opening connect retry the transient ones and give
- * up on the rest.
  */
 function isTransientTelegramError(error: unknown): boolean {
   return !(error instanceof TelegramApiError) || error.status >= 500 || error.errorCode === 429
 }
 
-/** A send retries transport failures and rate limits, but not a real rejection. */
-function telegramSendRetries(retryDelayMs: number, log: AdapterLog): Parameters<typeof withRetry>[1] {
+function telegramRetryPolicy(retryDelayMs: number, log: AdapterLog): Parameters<typeof withRetry>[1] {
   return {
     retries: 3,
     baseDelayMs: retryDelayMs,
@@ -148,11 +142,9 @@ function telegramSendRetries(retryDelayMs: number, log: AdapterLog): Parameters<
 /** How one telegram channel is built; the plugin row supplies it. */
 export interface TelegramChannelOptions {
   readonly token: string
-  /** Injected for tests; defaults to a proxy-aware global fetch. */
   readonly fetch?: typeof fetch
   readonly apiBaseUrl?: string
   readonly pollingTimeoutSec?: number
-  /** How long to wait after a failed poll before polling again. */
   readonly retryDelayMs?: number
   /** Client-side ceiling for one long poll, over the server's own hold. */
   readonly pollWatchdogMs?: number
@@ -174,7 +166,6 @@ function chatIdOf(route: string): number {
   return Number(match[1])
 }
 
-/** One message's attachments, as far as the Bot API already carries them. */
 function attachmentsOf(message: TelegramMessage): readonly ChannelAttachment[] {
   const found: ChannelAttachment[] = []
   const photo = message.photo?.at(-1)
@@ -205,8 +196,7 @@ function attachmentsOf(message: TelegramMessage): readonly ChannelAttachment[] {
 
 /**
  * Build the telegram channel. The gateway registers it; `start` begins polling
- * and `stop` ends it. Every provider call is one HTTP request, so a test can
- * inject `fetch` and drive the whole adapter without a network.
+ * and `stop` ends it.
  */
 export function createTelegramChannel(options: TelegramChannelOptions): Channel {
   const { token } = options
@@ -215,18 +205,14 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
   const apiBaseUrl = options.apiBaseUrl ?? 'https://api.telegram.org'
   const pollingTimeoutSec = options.pollingTimeoutSec ?? 30
   const retryDelayMs = options.retryDelayMs ?? 3000
-  // A long poll should return by the server-held `pollingTimeoutSec`; if the
-  // socket wedges it never does, so a client ceiling above that aborts and
-  // restarts the poll rather than letting the loop hang forever.
   const pollWatchdogMs = options.pollWatchdogMs ?? (pollingTimeoutSec + 15) * 1000
   const log = options.log ?? silentLog
-  const sendPolicy = telegramSendRetries(500, log)
+  const sendPolicy = telegramRetryPolicy(500, log)
 
   let running = false
   let abort: AbortController | undefined
   let loop: Promise<void> | undefined
 
-  /** Redact the token from anything a failure may quote back. */
   function redact(message: string): string {
     return message.split(token).join('***')
   }
@@ -234,7 +220,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
   async function call<T>(method: string, body?: Record<string, unknown> | FormData, signal?: AbortSignal): Promise<T> {
     const init: RequestInit = { method: 'POST' }
     if (body instanceof FormData) {
-      // Let fetch set the multipart content-type with its boundary.
       init.body = body
     } else if (body !== undefined) {
       init.headers = { 'content-type': 'application/json' }
@@ -260,7 +245,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
     return payload.result
   }
 
-  /** One update as the contract reads it, or nothing when it carries no sender. */
   function normalize(message: TelegramMessage): InboundMessage | undefined {
     const from = message.from
     // Channel posts arrive with no sender, so there is no actor to report and
@@ -310,8 +294,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
       ? 'photo'
       : attachment.kind === 'video' ? 'video' : attachment.kind === 'audio' ? 'audio' : 'document'
     if (attachment.data !== undefined) {
-      // Upload local bytes as multipart, so the caller can send content it holds
-      // rather than only a url or a file the provider already hosts.
       const form = new FormData()
       form.append('chat_id', String(chatId))
       const blob = new Blob([attachment.data], attachment.mimeType === undefined ? {} : { type: attachment.mimeType })
@@ -329,7 +311,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
     return sent.message_id
   }
 
-  /** Fetch and return the bytes behind an inbound attachment's file_id. */
   async function resolveAttachment(attachment: ChannelAttachment): Promise<ResolvedAttachment> {
     const fileId = attachment.ref
     if (fileId === undefined) {
@@ -361,10 +342,10 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
 
   /**
    * Open the channel: fetch the bot identity, retrying while the failure is
-   * transient (a proxy not yet up at boot, a blip, a 5xx/429) so a momentarily
-   * unreachable API delays the start instead of killing the channel for good. A
-   * real rejection — a bad token — is not transient and is thrown, failing the
-   * start as it should. Returns undefined if stopped before it connected.
+   * transient so a momentarily unreachable API delays the start instead of
+   * killing the channel for good. A real rejection — a bad token — is not
+   * transient and is thrown, failing the start as it should. Returns undefined
+   * if stopped before it connected.
    */
   async function connect(signal: AbortSignal): Promise<TelegramUser | undefined> {
     for (let attempt = 0; running && !signal.aborted; attempt += 1) {
@@ -385,8 +366,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
     let offset: number | undefined
     while (running && !signal.aborted) {
       let updates: TelegramUpdate[]
-      // Abort a poll that outlives the watchdog: the stop signal, or a timeout
-      // over the server hold, whichever fires first.
       const watchdog = AbortSignal.timeout(pollWatchdogMs)
       const pollSignal = AbortSignal.any([signal, watchdog])
       try {
@@ -456,9 +435,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
       if (running) return
       running = true
       abort = new AbortController()
-      // Retry the opening getMe the way the poll loop retries getUpdates: a boot
-      // where the API is briefly unreachable should delay the start, not leave
-      // the channel failed and offline until a manual restart.
       let me: TelegramUser | undefined
       try {
         me = await connect(abort.signal)
@@ -502,12 +478,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
         try {
           last = await sendAttachment(chatId, attachment)
         } catch (error: unknown) {
-          // Text cannot be taken back once sent, so a bare failure would read as
-          // "nothing arrived" and invite a resend that duplicates what the chat
-          // already shows. This is a transport failure rather than the caller's
-          // mistake, so it stays a plain Error with the original as its cause;
-          // the message is what tells the caller only the attachment is left to
-          // send. With no text delivered, the original error says it all.
           if (textId === undefined) throw error
           throw new Error(
             `telegram delivered the text as message ${String(textId)}, then attachment `
@@ -525,7 +495,6 @@ export function createTelegramChannel(options: TelegramChannelOptions): Channel 
   }
 }
 
-/** The telegram plugin row's own configuration. */
 export interface TelegramPluginConfig {
   /** Bot token; falls back to `DSH_TELEGRAM_TOKEN`. */
   readonly token?: string

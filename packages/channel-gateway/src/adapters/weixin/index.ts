@@ -2,10 +2,9 @@
  * Weixin: a long-polling channel adapter over the WeChat iLink bot protocol.
  *
  * It normalizes `getupdates` messages into {@link InboundMessage} and sends
- * `sendmessage` requests back; commands, session mapping and reply policy are
- * implemented above it, from `channel/inbound`. The protocol shape follows the
- * public iLink endpoints as implemented by `openclaw-weixin` (MIT) and
- * `nanobot` (MIT); the code here is this package's own.
+ * `sendmessage` requests back. The protocol shape follows the public iLink
+ * endpoints as implemented by `openclaw-weixin` (MIT) and `nanobot` (MIT); the
+ * code here is this package's own.
  *
  * Two transport facts a consumer needs: a reply carries the inbound message's
  * `context_token`, which WeChat expires server-side after roughly two minutes,
@@ -49,23 +48,18 @@ import {
   type WeixinMediaRef,
 } from './attachment-ref.ts'
 
-/** This adapter's own split threshold; a longer text becomes several messages. */
 export const WEIXIN_MAX_TEXT_LENGTH = 2048
 
-/** The public iLink bot endpoint family. */
 export const WEIXIN_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 
 /** Where iLink stores encrypted media; a download reads it, an upload writes it. */
 export const WEIXIN_DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
 
 /** iLink business codes worth naming; anything else is reported as it came. */
-const ERRCODE_CONTEXT_RESTRICTED = -2
-const ERRCODE_INVALID_ARGUMENT = -3
 const ERRCODE_STALE_TOKEN = -14
 
 /** `message_type` of a message this bot itself produced. */
 const MESSAGE_TYPE_BOT = 2
-/** `message_state` of a finished message; `item.type` of a text item. */
 const MESSAGE_STATE_FINISH = 2
 const ITEM_TYPE_TEXT = 1
 
@@ -90,7 +84,6 @@ const ROUTE_PREFIX = 'wx:'
  */
 const CONTEXT_TOKEN_MAX_AGE_MS = 80_000
 
-/** One failure the iLink API reported in its own envelope. */
 export class WeixinApiError extends Error {
   constructor(
     readonly endpoint: string,
@@ -109,7 +102,6 @@ interface WeixinMedia {
   len?: string
   /** The hex AES key some items carry beside `media` (images use it first). */
   aeskey?: string
-  /** Where the encrypted bytes live and the key to open them. */
   media?: {
     full_url?: string
     encrypt_query_param?: string
@@ -149,7 +141,6 @@ interface GetUpdatesResponse {
   longpolling_timeout_ms?: number
 }
 
-/** The `getconfig` reply, read only for the fresh context token it may carry. */
 interface GetConfigResponse {
   context_token?: string
 }
@@ -163,10 +154,8 @@ interface GetUploadUrlResponse {
 /** How one weixin channel is built; the plugin row supplies it. */
 export interface WeixinChannelOptions {
   readonly token: string
-  /** Injected for tests; defaults to a proxy-aware global fetch. */
   readonly fetch?: typeof fetch
   readonly baseUrl?: string
-  /** Where encrypted media is fetched and uploaded; defaults to the iLink CDN. */
   readonly cdnBaseUrl?: string
   /** Long-poll timeout for the first request, before the server suggests one. */
   readonly pollTimeoutSec?: number
@@ -208,9 +197,7 @@ function encodePart(value: string): string {
 
 /**
  * The route this adapter mints: the peer, plus the context token a reply must
- * quote. Both are opaque to every other layer — a consumer stores the route it
- * saw and hands it back, which is what lets the short-lived token travel
- * without the contract having to grow a field for it.
+ * quote. Both are opaque to every other layer.
  */
 function routeOf(userId: string, contextToken: string): string {
   return `${ROUTE_PREFIX}${encodePart(userId)}.${encodePart(contextToken)}`
@@ -233,12 +220,6 @@ function parseRoute(route: string): { userId: string; contextToken: string } {
   }
 }
 
-/**
- * Pack what a later download needs into the attachment's opaque `ref`, or
- * nothing when the item carries no locator to fetch from. The ref is
- * authenticated: it carries a MAC over the descriptor, so `resolveAttachment`
- * can tell a ref this channel minted from a string a caller composed.
- */
 function mediaRefOf(kind: ChannelAttachment['kind'], value: WeixinMedia, secret: Buffer): string | undefined {
   const fullUrl = value.media?.full_url?.trim() ?? ''
   const encParam = value.media?.encrypt_query_param ?? ''
@@ -252,7 +233,6 @@ function mediaRefOf(kind: ChannelAttachment['kind'], value: WeixinMedia, secret:
   return tryMintAttachmentRef(descriptor, secret)
 }
 
-/** Media an inbound item carried, with the handle a download later reads. */
 function attachmentsOf(items: readonly WeixinItem[], secret: Buffer): readonly ChannelAttachment[] {
   const found: ChannelAttachment[] = []
   for (const item of items) {
@@ -277,7 +257,6 @@ function attachmentsOf(items: readonly WeixinItem[], secret: Buffer): readonly C
   return found
 }
 
-/** The text of one message: its own text items, or the transcript voice carries. */
 function textOf(items: readonly WeixinItem[]): string {
   const parts: string[] = []
   for (const item of items) {
@@ -289,8 +268,7 @@ function textOf(items: readonly WeixinItem[]): string {
 
 /**
  * Build the weixin channel. The gateway registers it; `start` begins polling
- * and `stop` ends it. Every provider call is one HTTP request, so a test can
- * inject `fetch` and drive the whole adapter without a network.
+ * and `stop` ends it.
  */
 export function createWeixinChannel(options: WeixinChannelOptions): Channel {
   const { token } = options
@@ -305,9 +283,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
   const appId = options.appId ?? ''
   const appClientVersion = options.appClientVersion ?? 1
   const routeTag = options.routeTag
-  // Attachment refs are signed so a caller cannot hand back a ref this channel
-  // never minted; the key is derived from the token unless a deployment pins
-  // one to keep refs valid across a token rotation.
   const refSecret = deriveAttachmentRefSecret(options.attachmentRefSecret ?? token)
   const attachmentHosts: readonly string[] = (options.attachmentHosts ?? [
     ...new Set([new URL(cdnBaseUrl).hostname, new URL(WEIXIN_DEFAULT_CDN_BASE_URL).hostname]),
@@ -318,8 +293,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
   let running = false
   let abort: AbortController | undefined
   let loop: Promise<void> | undefined
-  // The freshest context token seen per user, and when: a send refreshes it
-  // before use if it has gone stale.
   const contextTokens = new Map<string, { token: string; at: number }>()
 
   function redact(message: string): string {
@@ -333,8 +306,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
       authorization: `Bearer ${token}`,
       'ilink-app-id': appId,
       'ilink-app-clientversion': String(appClientVersion),
-      // The protocol expects a fresh per-request identifier, base64 of a
-      // decimal uint32.
       'x-wechat-uin': Buffer.from(String(randomInt(0, 0x1_0000_0000)), 'utf8').toString('base64'),
       ...(routeTag === undefined ? {} : { skroutetag: routeTag }),
     }
@@ -365,9 +336,7 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     return payload
   }
 
-  /** One protocol message as the contract reads it, or nothing to report. */
   function normalize(message: WeixinMessage): InboundMessage | undefined {
-    // Our own sends come back through the same stream; they are not inbound.
     if (message.message_type === MESSAGE_TYPE_BOT) return undefined
     const from = message.from_user_id ?? ''
     if (from === '') return undefined
@@ -413,7 +382,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
         ? page.get_updates_buf
         : cursor
       if (typeof page.longpolling_timeout_ms === 'number' && page.longpolling_timeout_ms > 0) {
-        // Ask for a little longer than the server said it would hold the call.
         requestTimeoutMs = page.longpolling_timeout_ms + 5000
       }
       // This page's deliveries settle before the next `get_updates_buf` is
@@ -426,8 +394,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
       for (const message of page.msgs ?? []) {
         const normalized = normalize(message)
         if (normalized === undefined) continue
-        // Remember the token that came with this message; it is the freshest one
-        // for this user, and a later send refreshes from it if it ages out.
         const fromUser = message.from_user_id ?? ''
         const token = message.context_token ?? ''
         if (fromUser !== '' && token !== '') contextTokens.set(fromUser, { token, at: Date.now() })
@@ -473,7 +439,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     return token
   }
 
-  /** A send retries transport failures, but not a rejection the server means. */
   const sendRetry = {
     retries: 3,
     baseDelayMs: 500,
@@ -483,7 +448,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     },
   }
 
-  /** Send one message whose items are already built (text or media). */
   async function sendItems(userId: string, contextToken: string, clientId: string, itemList: readonly unknown[]): Promise<void> {
     await withRetry(() => request('ilink/bot/sendmessage', {
       msg: {
@@ -508,12 +472,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     }
   }
 
-  /**
-   * Upload one attachment's bytes to the iLink CDN and send it: ask for an
-   * upload URL, AES-encrypt and PUT the bytes, then send a media item that
-   * points at what the CDN stored. The caller supplies the bytes; this adapter
-   * owns the encryption the CDN requires.
-   */
   async function uploadMedia(userId: string, contextToken: string, clientId: string, attachment: ChannelAttachment): Promise<void> {
     if (attachment.data === undefined) {
       throw new ChannelGatewayError(`weixin can only send a ${attachment.kind} attachment given its bytes; a url or ref is not enough`)
@@ -523,7 +481,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     const { uploadType, itemType, itemKey } = mediaKindMapping(attachment.kind)
     const aesKeyRaw = randomBytes(16)
     const aesKeyHex = aesKeyRaw.toString('hex')
-    // PKCS7 always adds 1..16 bytes, rounding the ciphertext up to a block.
     const paddedSize = Math.ceil((raw.length + 1) / 16) * 16
     const fileKey = randomBytes(16).toString('hex')
 
@@ -565,7 +522,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
       throw new ChannelGatewayError('weixin media upload response carried no x-encrypted-param header')
     }
 
-    // The CDN download key is the hex key's ASCII bytes, base64-encoded.
     const cdnAesKeyB64 = Buffer.from(aesKeyHex, 'utf8').toString('base64')
     const mediaItem: Record<string, unknown> = {
       media: { encrypt_query_param: downloadParam, aes_key: cdnAesKeyB64, encrypt_type: 1 },
@@ -600,7 +556,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
     // Every candidate is checked against the allowlist before the loop, so a
     // ref cannot smuggle one refused host in behind an allowed one.
     for (const url of candidates) assertFetchableAttachmentUrl(url, attachmentHosts)
-    // Prefer image_item.aeskey (hex) as the reference client does, then media.aes_key.
     const keyB64 = descriptor.h !== undefined && descriptor.h !== ''
       ? Buffer.from(descriptor.h, 'hex').toString('base64')
       : descriptor.a ?? ''
@@ -704,9 +659,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
         throw new ChannelGatewayError('weixin send carried neither text nor attachments')
       }
       const contextToken = await resolveContextToken(target.userId, target.contextToken)
-      // The protocol answers a send with an empty body, so the id the caller
-      // gets back is the delivery id this adapter minted. Each part carries its
-      // own client id, so a retried part is idempotent rather than a duplicate.
       const deliveryId = `dsh-channel-gateway:${String(Date.now())}-${randomBytes(4).toString('hex')}`
       let part = 0
       for (const chunk of chunks) {
@@ -723,7 +675,6 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
   }
 }
 
-/** The weixin plugin row's own configuration. */
 export interface WeixinPluginConfig {
   /** iLink bot token; falls back to `DSH_WEIXIN_TOKEN`. */
   token?: string

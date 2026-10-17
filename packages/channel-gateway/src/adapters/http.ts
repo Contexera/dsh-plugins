@@ -16,15 +16,9 @@ import { EnvHttpProxyAgent, FormData as UndiciFormData, fetch as undiciFetch } f
  * recognize the body as multipart and serializes it as the string
  * `"[object FormData]"`. The provider then sees an empty request and answers
  * `there is no document in the request`, with no hint of the real cause.
- *
- * The failure hides behind the proxy branch: with no proxy configured the fetch
- * used to be the global one, so a global `FormData` happened to pair with it and
- * uploads worked. Any deployment with `HTTPS_PROXY` set — the case that needs a
- * proxy at all — silently sent nothing.
  */
 export const FormData: typeof globalThis.FormData = UndiciFormData as unknown as typeof globalThis.FormData
 
-/** The proxy variables Node's own fetch does not read on its own. */
 function proxyUrl(): string | undefined {
   const raw = process.env.HTTPS_PROXY
     ?? process.env.HTTP_PROXY
@@ -38,8 +32,7 @@ function proxyUrl(): string | undefined {
  *
  * Node's global fetch ignores the proxy variables unless `NODE_USE_ENV_PROXY`
  * is set, and a bot API that is only reachable through a proxy is a transport
- * fact rather than a usage choice — the transport layer is the right place for
- * it, and every layer above keeps calling a plain fetch.
+ * fact rather than a usage choice.
  *
  * This is always this package's own `undici` fetch, never the global one, even
  * when no proxy is configured: a caller cannot tell the two apart, but a
@@ -90,10 +83,8 @@ export interface RetryPolicy {
 }
 
 /**
- * Run `operation`, retrying transient failures with exponential backoff. Only
- * sends use this: a failed send otherwise loses a reply to a network blip or a
- * rate limit, while polling has its own loop. A non-retryable error, or the
- * last attempt's error, is rethrown unchanged.
+ * Run `operation`, retrying transient failures with exponential backoff. A
+ * non-retryable error, or the last attempt's error, is rethrown unchanged.
  */
 export async function withRetry<T>(operation: () => Promise<T>, policy: RetryPolicy): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {

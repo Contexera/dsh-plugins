@@ -5,12 +5,7 @@
  * assume it comes back unmodified: a caller that can reach
  * `Channel.resolveAttachment` can hand it any string. The ref therefore carries
  * a MAC over its own descriptor, and {@link openAttachmentRef} verifies version,
- * MAC, field bounds and kind before anything is fetched. The MAC key is derived
- * from the bot token unless a deployment configures its own secret.
- *
- * The descriptor stays the adapter's private business: it never leaves this
- * module in decoded form, and every rejection is a {@link ChannelGatewayError}
- * whose message names no URL, key or file name.
+ * MAC, field bounds and kind before anything is fetched.
  * @module @contexera/dsh-channel-gateway/weixin/attachment-ref
  */
 
@@ -57,10 +52,6 @@ interface WeixinAttachmentRefEnvelope {
   m: string
 }
 
-/**
- * A descriptor this module will not mint or accept. Internal: callers see
- * either a minted string or a {@link ChannelGatewayError}, never this.
- */
 class RefDescriptorError extends Error {}
 
 /**
@@ -129,15 +120,8 @@ function macOf(canonical: string, secret: Buffer): string {
  * the descriptor could not be represented; the inbound path uses
  * {@link tryMintAttachmentRef} instead so a hostile provider payload cannot
  * fail message normalization.
- *
- * The per-field ceilings bound each field in UTF-16 code units, but a ref is
- * base64url over the envelope's UTF-8 bytes, so the two do not move together: a
- * field at its ceiling of multi-byte characters encodes to well over
- * {@link WEIXIN_REF_MAX_LENGTH}. The minted length is therefore checked here,
- * against the same ceiling {@link openAttachmentRef} enforces, so this function
- * can never hand out a ref that its own opener would refuse.
  */
-export function mintAttachmentRef(descriptor: WeixinMediaRef, secret: Buffer): string {
+function mintAttachmentRef(descriptor: WeixinMediaRef, secret: Buffer): string {
   const normalized = normalizeDescriptor(descriptor)
   const envelope: WeixinAttachmentRefEnvelope = {
     v: WEIXIN_ATTACHMENT_REF_VERSION,

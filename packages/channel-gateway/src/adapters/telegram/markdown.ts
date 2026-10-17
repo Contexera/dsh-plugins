@@ -5,9 +5,7 @@
  * "Markdown" breaks on an unbalanced `_` or `*`, so the reliable path is HTML
  * parse mode with a small, closed tag set. This module turns Markdown into that
  * HTML and splits it so no chunk crosses Telegram's per-message limit or leaves
- * a fenced code block half-open. It is transport fidelity — how one provider
- * shows formatted text — not a usage opinion: a consumer asks for it per
- * message through {@link OutboundMessage.format}.
+ * a fenced code block half-open.
  *
  * The approach follows nanobot's telegram renderer (MIT): protect code, render
  * the rest, restore code last.
@@ -17,26 +15,22 @@
 import { ChannelGatewayError } from '../../errors.ts'
 import { avoidSurrogateSplit } from '../text.ts'
 
-/** Sentinels that stand in for code while the surrounding text is transformed. */
 const CODE_BLOCK = (index: number): string => `\u0000CB${String(index)}\u0000`
 const INLINE_CODE = (index: number): string => `\u0000IC${String(index)}\u0000`
-/** Header markers that survive HTML escaping, restored to `<b>` at the end. */
 const HEADER_OPEN = '\u2770B\u2771'
 const HEADER_CLOSE = '\u2770/B\u2771'
 
-/** The four characters that would otherwise be read as HTML markup. */
+/** The three characters that would otherwise be read as HTML markup. */
 export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** Display width of a string, counting East Asian wide characters as two. */
 function displayWidth(text: string): number {
   let width = 0
   for (const char of text) width += isWide(char.codePointAt(0) ?? 0) ? 2 : 1
   return width
 }
 
-/** Whether a code point occupies two columns in a monospace terminal. */
 function isWide(code: number): boolean {
   return (
     (code >= 0x1100 && code <= 0x115f)
@@ -53,7 +47,6 @@ function isWide(code: number): boolean {
   )
 }
 
-/** Strip inline Markdown so a table cell measures and prints as plain text. */
 function stripInlineMarkdown(text: string): string {
   return text
     .replace(/\*\*(.+?)\*\*/g, '$1')
@@ -105,13 +98,10 @@ export function renderTelegramHtml(text: string): string {
   const inlineCodes: string[] = []
 
   let out = text.replace(/```(?:[^\n]*\n)?([\s\S]*?)```/g, (_match, code: string) => {
-    // Drop the newline that sits before the closing fence so the <pre> block
-    // does not render a trailing blank line.
     codeBlocks.push(code.replace(/\n$/, ''))
     return CODE_BLOCK(codeBlocks.length - 1)
   })
 
-  // Tables become box drawings, parked as code blocks so they land in a <pre>.
   const lines = out.split('\n')
   const rebuilt: string[] = []
   let index = 0
@@ -144,7 +134,9 @@ export function renderTelegramHtml(text: string): string {
   out = out.replace(/^#{1,6}\s+(.+)$/gm, (_match, heading: string) => `${HEADER_OPEN}${heading}${HEADER_CLOSE}`)
   out = out.replace(/^>\s*(.*)$/gm, '$1')
   out = escapeTelegramHtml(out)
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) =>
+    `<a href="${url.replace(/"/g, '%22')}">${label}</a>`,
+  )
   out = out.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/__(.+?)__/g, '<b>$1</b>')
   out = out.replace(/(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])/g, '<i>$1</i>')
   out = out.replace(/~~(.+?)~~/g, '<s>$1</s>')
@@ -171,7 +163,6 @@ function fenceContext(content: string, pos: number): { inside: boolean; opening:
   return { inside: true, opening, fence: lineEnd < 0 ? content.slice(opening) : content.slice(opening, lineEnd) }
 }
 
-/** Last index of `sub` at or after `from`, or -1 — Python's `str.rfind(sub, from)`. */
 function rfindFrom(text: string, sub: string, from: number): number {
   const index = text.lastIndexOf(sub)
   return index >= from ? index : -1
@@ -206,8 +197,6 @@ export function splitTelegramMarkdown(content: string, maxLen: number): string[]
         const closing = '\n```'
         let minCodePos = fence.length
         if (rest.startsWith(`${fence}\n`)) minCodePos += 1
-        // When the only break in range is the opening fence line, cutting there
-        // would re-emit the same fence and never advance; fall back accordingly.
         if (pos < minCodePos) {
           if (minCodePos + closing.length >= maxLen) {
             chunks.push(rest.slice(0, avoidSurrogateSplit(rest, maxLen)))
@@ -244,7 +233,6 @@ export function splitTelegramMarkdown(content: string, maxLen: number): string[]
   return chunks
 }
 
-/** The break point inside a fence: last newline in budget, else space, else budget. */
 function adjustedFenceBreak(content: string, budget: number, minCodePos: number): number {
   const recut = content.slice(0, budget)
   let adjusted = rfindFrom(recut, '\n', minCodePos)

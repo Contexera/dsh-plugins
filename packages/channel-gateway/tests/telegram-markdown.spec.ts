@@ -24,6 +24,11 @@ describe('renderTelegramHtml', () => {
     expect(renderTelegramHtml('```\nif (a < b) {}\n```')).toBe('<pre><code>if (a &lt; b) {}</code></pre>')
   })
 
+  it('cannot break out of a link attribute', () => {
+    expect(renderTelegramHtml('[x](https://a/?q="onmouseover=alert(1))'))
+      .toBe('<a href="https://a/?q=%22onmouseover=alert(1">x</a>)')
+  })
+
   it('does not treat markdown inside a code fence as markdown', () => {
     expect(renderTelegramHtml('```\n**not bold**\n```')).toBe('<pre><code>**not bold**</code></pre>')
   })
@@ -47,25 +52,22 @@ describe('splitTelegramMarkdown', () => {
     const content = '```js\n' + body + '```'
     const chunks = splitTelegramMarkdown(content, 80)
     expect(chunks.length).toBeGreaterThan(1)
-    // Every chunk balances its fences: an even number of ``` markers.
     for (const chunk of chunks) {
       expect((chunk.match(/```/g) ?? []).length % 2).toBe(0)
     }
-    // The reopened chunks carry the original fence line.
     expect(chunks[1]?.startsWith('```js')).toBe(true)
   })
 })
 
 describe('splitTelegramHtml', () => {
   it('keeps every rendered chunk within the limit', () => {
-    const content = 'word '.repeat(2000) // ~10k chars of plain prose
+    const content = 'word '.repeat(2000)
     const chunks = splitTelegramHtml(content, LIMIT)
     expect(chunks.length).toBeGreaterThan(1)
     for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(LIMIT)
   })
 
   it('re-splits when HTML escaping pushes a chunk over the limit', () => {
-    // A block of '<' each escapes to '&lt;' (4x): the raw text fits, the HTML does not.
     const content = '<'.repeat(2000)
     const chunks = splitTelegramHtml(content, LIMIT)
     expect(chunks.length).toBeGreaterThan(1)

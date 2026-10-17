@@ -5,7 +5,6 @@ import type { Channel, ChannelInboundSink, ChannelInbox, InboundMessage } from '
 import { ChannelGatewayError } from '../src/errors.ts'
 import { ChannelGateway } from '../src/gateway.ts'
 
-/** Let the gateway's fire-and-forget work (start, authorize, stop) settle. */
 const settle = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 0) })
 
 interface TestChannelOptions {
@@ -212,14 +211,7 @@ describe('ChannelGateway', () => {
   })
 })
 
-/**
- * The reliable acceptance seam. Without a sink the gateway only announces, so
- * these tests pin what a sink adds: `deliver` settles on acceptance, a rejected
- * acceptance is visible to the adapter (which is what lets it hold its provider
- * cursor), and the announcement never precedes acceptance.
- */
 describe('ChannelGateway inbound sink', () => {
-  /** A sink that records what it accepted, and can be made to fail or stall. */
   function recordingSink() {
     const accepted: InboundMessage[] = []
     let mode: 'ok' | 'reject' | 'stall' = 'ok'
@@ -269,8 +261,6 @@ describe('ChannelGateway inbound sink', () => {
     const delivered = registered.firstInbox()?.deliver(inbound()).then(() => { settled = true })
     await settle()
 
-    // The sink has the message in hand but has not accepted it, so the adapter
-    // has nothing to advance past and no listener has been told anything.
     expect(sink.accepted.map(message => message.providerMessageId)).toEqual(['1'])
     expect(settled).toBe(false)
     expect(seen).toEqual([])
@@ -331,8 +321,6 @@ describe('ChannelGateway inbound sink', () => {
     await registered.firstInbox()?.deliver(inbound({ channel: 'other' }))
     await registered.firstInbox()?.deliver(inbound({ actor: { id: '7' } }))
 
-    // Refusing a message is a decision about it, so it resolves: an adapter that
-    // re-read it would only be refused again, and its cursor should move on.
     expect(sink.accepted).toEqual([])
     expect(seen).toEqual([])
   })

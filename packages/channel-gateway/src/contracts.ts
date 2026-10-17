@@ -1,12 +1,5 @@
 /**
  * The channel contract: the shape every transport normalizes to.
- *
- * This is a public API other plugins depend on, so it stays small, stable and
- * versionable: a field enters it only when a consumer needs it, never
- * speculatively. Deduplication, actor identity beyond the provider's id, session
- * routing and visibility rules are implemented by a consumer listening to
- * `channel/inbound`, registering a {@link ChannelInboundSink}, or by the code
- * that calls {@link OutboundMessage} sends.
  * @module @contexera/dsh-channel-gateway/contracts
  */
 
@@ -16,11 +9,9 @@ export interface ChannelActor {
   readonly id: string
   /** Human-readable name when the provider gives one; never an identity. */
   readonly displayName?: string
-  /** Whether the provider itself marks the sender as a bot. */
   readonly isBot?: boolean
 }
 
-/** The shape of the conversation a message arrived in. */
 export type ChannelPlaceKind = 'direct' | 'group' | 'channel'
 
 /**
@@ -41,15 +32,9 @@ export interface ChannelPlace {
 
 /**
  * Who can see the exchange: only the actor, or everyone in the place.
- *
- * Both channels in this package derive it from the conversation they received,
- * but it stays a field of its own because a consumer routes on "was this said
- * to me privately or in front of others", which is not the same question as
- * what kind of place it is.
  */
 export type ChannelVisibility = 'private' | 'group'
 
-/** What an attachment is, as far as this gateway will carry it. */
 export type ChannelAttachmentKind = 'image' | 'audio' | 'video' | 'file'
 
 /**
@@ -75,9 +60,7 @@ export interface ChannelAttachment {
 
 /**
  * The content behind an inbound {@link ChannelAttachment}, once a channel has
- * fetched (and, where the provider encrypts them, decrypted) it. Bytes rather
- * than a URL or a path: a provider URL may embed the bot's own credential, and
- * where the bytes live afterwards is the caller's decision, not the gateway's.
+ * fetched (and, where the provider encrypts them, decrypted) it.
  */
 export interface ResolvedAttachment {
   readonly bytes: Uint8Array
@@ -85,9 +68,7 @@ export interface ResolvedAttachment {
   readonly name?: string
 }
 
-/** One normalized inbound message. */
 export interface InboundMessage {
-  /** The registered channel's name, e.g. `telegram`. */
   readonly channel: string
   /** The provider's stable message id; a consumer keys deduplication on it. */
   readonly providerMessageId: string
@@ -108,7 +89,6 @@ export interface InboundMessage {
 /** How an outbound text should be rendered by the channel that carries it. */
 export type OutboundTextFormat = 'plain' | 'markdown'
 
-/** One normalized outbound message. */
 export interface OutboundMessage {
   /** The registered channel to send through. */
   readonly channel: string
@@ -182,7 +162,6 @@ export interface ChannelInbox {
   deliver(message: InboundMessage): Promise<void>
 }
 
-/** One transport adapter, as the gateway sees it. */
 export interface Channel {
   /** Unique within a gateway; every message it carries names this value. */
   readonly name: string
@@ -210,10 +189,4 @@ export interface Channel {
 export interface RegisteredChannel {
   readonly name: string
   readonly capabilities: ChannelCapabilities
-}
-
-/** One message a channel hands over, with the channel that owns it. */
-export interface DeliveredMessage {
-  readonly channel: string
-  readonly message: InboundMessage
 }

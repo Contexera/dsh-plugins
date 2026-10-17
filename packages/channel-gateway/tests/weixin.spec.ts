@@ -81,13 +81,6 @@ function pollOnce(page: unknown, ...rest: readonly Responder[]): Responder {
   }
 }
 
-/**
- * An iLink that re-serves one page while the cursor it is handed is still behind
- * it, so a test can see whether a delivery that failed was requested again or
- * silently skipped. Once the cursor reaches `settledCursor` it waits for stop,
- * and after `resends` re-servings it waits too — a test that keeps failing a
- * delivery must not spin the loop at full speed while it asserts.
- */
 function resendingWeixin(
   page: Readonly<Record<string, unknown>>,
   settledCursor: string,
@@ -199,7 +192,6 @@ describe('weixin channel', () => {
     expect(attachments.map(a => a.kind)).toEqual(['image', 'file'])
     expect(attachments[0]?.size).toBe(2048)
     expect(attachments[1]?.name).toBe('plan.pdf')
-    // A media item that carries a locator gets a ref the channel can resolve.
     expect(typeof attachments[0]?.ref).toBe('string')
     expect(typeof attachments[1]?.ref).toBe('string')
     expect(channel.capabilities.attachments).toBe(true)
@@ -269,14 +261,11 @@ describe('weixin channel', () => {
     expect(sends).toHaveLength(2)
     const first = sends[0]?.body.msg as { item_list?: readonly { text_item?: { text?: string } }[] } | undefined
     expect(first?.item_list?.[0]?.text_item?.text).toHaveLength(WEIXIN_MAX_TEXT_LENGTH)
-    // Each chunk carries its own client id, so a retry cannot duplicate one.
     const clientIds = sends.map(call => (call.body.msg as { client_id?: string }).client_id)
     expect(clientIds[0]).not.toBe(clientIds[1])
   })
 
   it('refreshes a stale context token via getconfig before sending', async () => {
-    // A route for a user never seen inbound has no cached age, so the token is
-    // treated as stale and refreshed before use.
     const userId = Buffer.from('wxid_unseen', 'utf8').toString('base64url')
     const oldToken = Buffer.from('old-token', 'utf8').toString('base64url')
     const route = `wx:${userId}.${oldToken}`
@@ -431,12 +420,10 @@ describe('weixin delivery durability', () => {
         }
       },
     })
-    // Accepted on the second handing-over, so the cursor may now move.
     await waitFor(() => attempts.length >= 2)
     await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-1'))
     await channel.stop()
 
-    // The message was requested again rather than skipped: never a gap.
     expect(attempts).toEqual(['501', '501'])
   })
 
@@ -459,12 +446,9 @@ describe('weixin delivery durability', () => {
         }
       },
     })
-    // The page is accepted on its second handing-over, so the cursor commits.
     await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-2'), 1000)
     await channel.stop()
 
-    // The first message is re-delivered even though it was accepted the first
-    // time — a sink is expected to be idempotent — and nothing was skipped.
     expect(attempts.slice(0, 4)).toEqual(['501', '502', '501', '502'])
   })
 
@@ -483,8 +467,6 @@ describe('weixin delivery durability', () => {
     await waitFor(() => attempts >= 3, 1000)
     await channel.stop()
 
-    // The cursor never moved, so every request asked for the same page again: a
-    // provider that is not re-asked cannot hand the message over a second time.
     const polls = calls.filter(call => call.endpoint === 'getupdates')
     expect(polls.length).toBeGreaterThanOrEqual(3)
     expect(polls.every(call => call.body.get_updates_buf !== 'cursor-9')).toBe(true)
@@ -494,7 +476,6 @@ describe('weixin delivery durability', () => {
     const page = { get_updates_buf: 'cursor-3', msgs: [textMessage] }
     const userId = Buffer.from('wxid_peer', 'utf8').toString('base64url')
     const routeToken = Buffer.from('a-stale-route-token', 'utf8').toString('base64url')
-    // Any getconfig call would mean the cached token was not used.
     const { impl, calls } = fakeWeixin(resendingWeixin(page, 'cursor-3', (endpoint) => {
       if (endpoint === 'getconfig') throw new Error('the cached token should have been used')
       return {}
@@ -508,12 +489,9 @@ describe('weixin delivery durability', () => {
         if (attempts === 1) throw new Error('the store is full')
       },
     })
-    // Accepted on the second handing-over, so the cursor commits and polling settles.
     await waitFor(() => calls.some(call => call.endpoint === 'getupdates' && call.body.get_updates_buf === 'cursor-3'), 1000)
     await channel.stop()
 
-    // The delivery failed, but the token that came with the page is the freshest
-    // one for that user, so a reply can still be addressed without a refresh.
     await channel.send({ channel: 'weixin', route: `wx:${userId}.${routeToken}`, text: 'hi' })
 
     const send = calls.find(call => call.endpoint === 'sendmessage')
@@ -570,7 +548,6 @@ describe('weixin attachment refs are authenticated before any network access', (
   it('refuses a ref a caller composed without contacting the network', async () => {
     const { channel, fetched, attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
     expect(attachment?.ref).toBeDefined()
-    // A ref that is well-formed base64url of a plausible descriptor, but unsigned.
     const forged = Buffer.from(JSON.stringify({
       v: 1,
       d: { k: 'image', u: 'https://evil.test/steal' },
@@ -590,14 +567,12 @@ describe('weixin attachment refs are authenticated before any network access', (
     const { channel, fetched, attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
     const ref = attachment!.ref!
 
-    // Re-encode the signed envelope with the locator swapped for another host.
     const envelope = JSON.parse(Buffer.from(ref, 'base64url').toString('utf8')) as { d: { u?: string } }
     envelope.d.u = 'https://evil.test/steal'
     const tampered = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')
     await expect(channel.resolveAttachment?.({ kind: 'image', ref: tampered }))
       .rejects.toThrow(/not one this channel minted/)
 
-    // The signed kind is part of what the MAC covers.
     await expect(channel.resolveAttachment?.({ kind: 'file', ref }))
       .rejects.toThrow(/different attachment kind/)
 
@@ -609,8 +584,6 @@ describe('weixin attachment refs are authenticated before any network access', (
   })
 
   it('refuses a non-https locator and a host outside the allowlist', async () => {
-    // The allowlist is enforced against the signed descriptor, so a provider
-    // that hands out a plain-http or third-party URL cannot get it fetched.
     const { channel, fetched, attachment } = await channelWithMedia(
       { type: 2, msg_id: 'm-http', image_item: { media: { full_url: 'http://cdn.test/enc' } } },
       { attachmentHosts: ['cdn.test'] },
@@ -685,7 +658,6 @@ describe('weixin attachment refs are authenticated before any network access', (
 
   it('mints a ref bound to its own channel token', async () => {
     const { attachment } = await channelWithMedia(imageItem, { attachmentHosts: ['cdn.test'] })
-    // Same descriptor, a different token: the MAC no longer verifies.
     const other = createWeixinChannel({ token: 'OTHER', fetch: (async () => { throw new Error('no network') }) as unknown as typeof fetch })
     await expect(other.resolveAttachment?.({ kind: 'image', ref: attachment!.ref! }))
       .rejects.toThrow(/not one this channel minted/)
@@ -727,13 +699,6 @@ describe('weixin attachment refs are authenticated before any network access', (
   }
 
   it('reports an item whose ref cannot be represented without a ref, not with an unusable one', async () => {
-    // The inbound contract: a hostile or merely huge provider payload degrades
-    // to an attachment with no download handle. It must not hand out a ref that
-    // `resolveAttachment` would later refuse.
-    //
-    // The locator is exactly at the per-field ceiling (2048 UTF-16 units), so it
-    // is the encoded total — not the field bound — that has to reject it: a URL
-    // of 2048 multi-byte characters encodes to a ref well past 8192.
     const prefix = 'https://cdn.test/'
     const huge = `${prefix}${'中'.repeat(WEIXIN_REF_MAX_URL_LENGTH - prefix.length)}`
     expect(huge.length).toBe(WEIXIN_REF_MAX_URL_LENGTH)

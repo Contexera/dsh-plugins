@@ -16,7 +16,6 @@ describe('weixin media crypto', () => {
     const raw = randomBytes(16)
     const hexKeyB64 = Buffer.from(raw.toString('hex'), 'utf8').toString('base64')
 
-    // Both encodings must resolve to the same 16 raw bytes.
     expect(parseAesKey(hexKeyB64).equals(raw)).toBe(true)
     expect(parseAesKey(raw.toString('base64')).equals(raw)).toBe(true)
   })

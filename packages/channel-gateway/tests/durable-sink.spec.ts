@@ -5,17 +5,6 @@ import { allowlistAuth } from '../src/auth.ts'
 import type { ChannelInboundSink, InboundMessage } from '../src/contracts.ts'
 import { ChannelGateway } from '../src/gateway.ts'
 
-/**
- * The documented use of the reliable seam, end to end: a gateway with a sink and
- * a real adapter registered on that gateway, so the inbox the adapter delivers
- * through is the gateway's own rather than a stand-in. The provider hands the
- * same page over twice, because the first acceptance failed.
- *
- * The sink is the "minimal durable consumer" the design asks for. Its store is
- * keyed on `(channel, providerMessageId)` — the contract's own dedupe key — and
- * it models a write that can fail, because a sink that could never fail would
- * prove nothing about retry.
- */
 function durableStore() {
   const records = new Map<string, InboundMessage>()
   let failNext = false
@@ -27,7 +16,6 @@ function durableStore() {
         failNext = false
         throw new Error('the store is unavailable')
       }
-      // Idempotent by key: a re-delivered message updates the same record.
       records.set(`${message.channel}\u0000${message.providerMessageId}`, message)
     },
   }
@@ -39,13 +27,6 @@ function durableStore() {
   }
 }
 
-/**
- * A Bot API that re-serves `updates` until the offset has passed them, the way
- * the real one re-sends everything at or after the offset it is handed. Once the
- * offset moves past them it holds the poll open, as a long poll does. The number
- * of re-servings is bounded so a delivery that keeps failing cannot spin the
- * loop while a test asserts.
- */
 function botApi(updates: readonly Record<string, unknown>[]) {
   let resends = 0
   const impl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -71,7 +52,6 @@ function botApi(updates: readonly Record<string, unknown>[]) {
   return impl
 }
 
-/** Let the gateway's and the adapter's own async work settle. */
 const settle = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 0) })
 
 async function waitFor(check: () => boolean, timeoutMs = 1000): Promise<void> {
@@ -95,11 +75,6 @@ function update(id: number, updateId: number) {
   }
 }
 
-/**
- * Mount a gateway with its sink already in place, then register a real adapter,
- * so the sink covers the first poll — registering it afterwards would let the
- * first page through unaccepted.
- */
 async function mounted(
   updates: readonly Record<string, unknown>[],
   allow: readonly string[],
@@ -131,14 +106,11 @@ describe('a durable sink behind a real adapter', () => {
 
   it('produces one durable record from a page the provider handed over twice', async () => {
     const store = durableStore()
-    // The first acceptance fails, so the adapter must hold the offset and the
-    // provider then hands the very same update over again.
     store.failNextAcceptance()
     const { announced } = await mounted([update(1, 10)], ['telegram:42'], store.sink)
 
     await waitFor(() => announced.length === 1)
 
-    // Two attempts, one record: idempotent by (channel, providerMessageId).
     expect(store.writes()).toBeGreaterThanOrEqual(2)
     expect(store.records.size).toBe(1)
     expect(announced.map(message => message.providerMessageId)).toEqual(['1'])
@@ -146,17 +118,12 @@ describe('a durable sink behind a real adapter', () => {
 
   it('does not let a refused message hold the page behind it', async () => {
     const store = durableStore()
-    // The first update is from an actor the policy refuses, the second from an
-    // admitted one. Both are on the same page.
     const stranger = {
       update_id: 10,
       message: { ...update(1, 10).message, from: { id: 999, first_name: 'Nobody', is_bot: false } },
     }
     const { announced } = await mounted([stranger, update(2, 11)], ['telegram:42'], store.sink)
 
-    // The admitted message arrives, which is only possible if the refused one
-    // resolved rather than rejecting: a rejection would hold the offset and the
-    // page would be handed over again instead of moving on.
     await waitFor(() => announced.length === 1)
 
     expect(store.writes()).toBe(1)
