@@ -381,6 +381,64 @@ describe('weixin channel', () => {
 
     expect(result.providerMessageId.startsWith('dsh-channel-gateway:')).toBe(true)
     expect(cdnBody).toBeDefined()
+    // The one send id is the client-id stem every chunk of this send carries, so
+    // iLink's dedupe sees the parts of one send rather than N unrelated sends.
+    expect(sendBody?.msg).toMatchObject({ client_id: `${result.providerMessageId}.0` })
+  })
+
+  it('mints a distinct send id per send, so two sends are never deduplicated as one', async () => {
+    const { impl, calls } = fakeWeixin(pollOnce(
+      { msgs: [textMessage] },
+      () => ({}),
+    ))
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl, retryDelayMs: 1 })
+    const seen: InboundMessage[] = []
+    await channel.start({ deliver: async message => { seen.push(message) } })
+    await waitFor(() => seen.length > 0)
+
+    const route = seen[0]?.place.route ?? ''
+    const first = await channel.send({ channel: 'weixin', route, text: 'one' })
+    const second = await channel.send({ channel: 'weixin', route, text: 'two' })
+    await channel.stop()
+
+    expect(first.providerMessageId).not.toBe(second.providerMessageId)
+    const clientIds = calls.filter(call => call.endpoint === 'sendmessage')
+      .map(call => (call.body.msg as { client_id?: string }).client_id)
+    expect(clientIds).toEqual([`${first.providerMessageId}.0`, `${second.providerMessageId}.0`])
+  })
+
+  it('uploads an image attachment and sends it as a media item', async () => {
+    const route = `wx:${Buffer.from('u', 'utf8').toString('base64url')}.${Buffer.from('ctx', 'utf8').toString('base64url')}`
+    let cdnBody: unknown
+    let sendBody: { msg?: { item_list?: { type?: number; image_item?: { media?: { encrypt_query_param?: string } } }[] } } | undefined
+    const impl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = String(input)
+      if (url.includes('/ilink/bot/getconfig')) return jsonResponse({})
+      if (url.includes('/ilink/bot/getuploadurl')) return jsonResponse({ upload_full_url: 'https://cdn.test/up' })
+      if (url === 'https://cdn.test/up') {
+        cdnBody = init?.body
+        return { ok: true, status: 200, headers: new Headers({ 'x-encrypted-param': 'DL-PARAM' }) } as unknown as Response
+      }
+      if (url.includes('/ilink/bot/sendmessage')) {
+        sendBody = JSON.parse(String(init?.body)) as typeof sendBody
+        return jsonResponse({})
+      }
+      throw new Error(`unexpected ${url}`)
+    }) as unknown as typeof fetch
+    const channel = createWeixinChannel({ token: 'TOKEN', fetch: impl })
+
+    const result = await channel.send({
+      channel: 'weixin',
+      route,
+      text: '',
+      attachments: [{ kind: 'image', name: 'a.jpg', data: new Uint8Array([1, 2, 3, 4, 5]) }],
+    })
+
+    expect(result.providerMessageId.startsWith('dsh-channel-gateway:')).toBe(true)
+    expect(cdnBody).toBeDefined()
+    // The one send id is the client-id stem every chunk of this send carries, so
+    // iLink's dedupe sees the parts of one send rather than N unrelated sends.
+    expect(sendBody?.msg).toMatchObject({ client_id: `${result.providerMessageId}.0` })
     const item = sendBody?.msg?.item_list?.[0]
     expect(item?.type).toBe(2)
     expect(item?.image_item?.media?.encrypt_query_param).toBe('DL-PARAM')

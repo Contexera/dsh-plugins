@@ -39,6 +39,12 @@ does not supply them in a usable form:
   the route it saw and hands it back as `OutboundMessage.route`; no layer above
   the adapter composes a provider address.
 
+The same field on a `ChannelSendResult` is the id the channel can name for the
+send: the provider's own where it returns one (Telegram's `message_id`), and an
+id the channel minted where it does not — iLink's `sendmessage` reports nothing,
+so a weixin send's value is a per-send handle, not a provider id to deduplicate
+or look up on.
+
 ## Install
 
 The package is a DSH bundle: adding it inserts the gateway service row.

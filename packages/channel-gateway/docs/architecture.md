@@ -245,6 +245,12 @@ refreshed through `getconfig`. Outbound media is uploaded to the iLink CDN
 (AES-128-ECB, per `getuploadurl`) and sent as a media item; a transient send
 failure is retried with backoff.
 
+Unlike Telegram, this channel cannot report the provider's id for a send:
+`sendmessage` answers HTTP 200 with an empty body whatever the outcome. The
+`providerMessageId` a weixin send returns is therefore an id the channel minted
+per send — a handle for correlating the chunks of one send, not a provider id,
+and not a value to deduplicate sends on.
+
 ### Attachment refs
 
 `ref` is the one attachment field a caller can compose, and

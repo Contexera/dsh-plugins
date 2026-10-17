@@ -669,6 +669,8 @@ export function createWeixinChannel(options: WeixinChannelOptions): Channel {
         await uploadMedia(target.userId, contextToken, `${deliveryId}.${String(part)}`, attachment)
         part += 1
       }
+      // iLink answers `sendmessage` with an empty 200 body and reports no message
+      // id, so this send's own identifier is the only value available.
       return { providerMessageId: deliveryId }
     },
     resolveAttachment,

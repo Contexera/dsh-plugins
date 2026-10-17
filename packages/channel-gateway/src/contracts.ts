@@ -109,7 +109,16 @@ export interface OutboundMessage {
 
 /** What one send produced. */
 export interface ChannelSendResult {
-  /** The provider's id for the message this send created. */
+  /**
+   * The id the channel can name for the message this send created.
+   *
+   * It is the provider's own id where the provider returns one (Telegram's
+   * `message_id`). iLink's `sendmessage` answers HTTP 200 with an empty body
+   * whatever the outcome, so the weixin channel cannot obtain one and reports
+   * an id it minted instead; such a value is a per-send identifier, not a
+   * provider id, and must not be used to deduplicate sends or to look the
+   * message up on the provider's side.
+   */
   readonly providerMessageId: string
 }
 
