@@ -1,19 +1,7 @@
 /**
  * The one return-anchor policy: which point in a generation's history may be
- * entered again, and what it costs.
- *
- * Three readers ask that question — the timeline read, a search hit's
- * enrichment, and the rollover executed later against mutable guards — and they
- * must never answer it differently: a ref one surface offers has to be a ref
- * `context_rollover` accepts. Everything here is a read-only evaluation of a
- * generation that has already been folded; nothing mutates a fold, measures a
- * source, or performs an effect.
- *
- * Two rules are deliberately separated. What an anchor *is* decides before what
- * it *costs*, so a boundary that entered the context through several topics
- * never reads as a budget problem; and an unmeasurable source is never priced
- * as free, because "the budget cannot be proven" is exactly the state in which
- * a return must not be offered.
+ * entered again, and what it costs. Every surface that offers a ref asks here,
+ * so a ref one surface offers is a ref `context_rollover` accepts.
  * @module @contexera/dsh-context-continuity/anchor
  */
 
@@ -21,7 +9,6 @@ import type { ContextProjectionHost } from './projection.ts'
 import type { ContextProjectionState } from './projection-state.ts'
 import type { SurfaceMeasurement } from './compaction.ts'
 
-/** Which structural source produced one anchor. */
 export type AnchorSourceKind = 'checkpoint' | 'boundary' | 'head'
 
 /** One structural anchor inside one generation's folded state. */
@@ -33,23 +20,20 @@ export interface AnchorCandidate {
   readonly source: AnchorSourceKind
   /** The host's boundary kind, for `boundary` candidates — engine-opaque domain vocabulary. */
   readonly kind?: string
-  /** The seq the anchor's own event occupies. */
   readonly seq: number
   /** The completed turn the anchor resolved at, or `-1` while it is unresolved. */
   readonly turnEndSeq: number
   /**
    * The topics whose facts had entered this generation's context by this
-   * anchor — what the retained prefix would carry, not what the anchor's own
-   * boundary arrived with. A return target whose prefix holds a second topic's
-   * facts is a seed that would have to hand off two things.
+   * anchor: what the retained prefix would carry, not what the anchor's own
+   * boundary arrived with.
    */
   readonly topicsThrough: readonly string[]
 }
 
 /**
- * The domain nouns one anchor reason is worded in. The subject reads these
- * strings, and what a host calls its topics is the host's vocabulary — a rule
- * the engine owns is still worded in the words its reader already uses.
+ * The domain nouns one anchor reason is worded in; the subject reads these
+ * strings, and what a host calls its topics is the host's vocabulary.
  */
 export interface AnchorReasonText {
   /** How one attributable subject of a boundary is named, e.g. `topic`, `Thread`. */
@@ -60,7 +44,6 @@ export interface AnchorReasonText {
 
 /** What one application of the shared anchor rule needs beyond the anchor itself. */
 export interface AnchorRule {
-  /** The host whose own rule for its boundary kinds is asked, when it has one. */
   readonly host?: ContextProjectionHost | undefined
   /** The domain nouns the topic reasons are worded in; defaults to `topic`/`topics`. */
   readonly text?: AnchorReasonText | undefined
@@ -68,15 +51,9 @@ export interface AnchorRule {
 
 /**
  * The exact cost of entering one anchor: what its seed prefix would keep,
- * priced node by node out of the source's own measurement.
- *
- * An estimate over the log's shape is not good enough here, and the number is
- * not decorative: it is what decides whether a return is offered at all. The
- * nodes are the model-visible ones, so the sum is what the successor would
- * actually pay for the prefix — whereas a share of the source's total can
- * underprice a prefix that holds an oversized tool result and misreport an
- * anchor past the budget as affordable. `undefined` when the source prices
- * nothing node by node: an unmeasurable prefix is never a cheap one.
+ * priced node by node out of the source's own measurement. A share of the
+ * source's total would underprice a prefix holding an oversized tool result.
+ * `undefined` when the source prices nothing node by node.
  */
 export function retainedPrice(
   measurement: SurfaceMeasurement | undefined,
@@ -88,7 +65,6 @@ export function retainedPrice(
   return tokens
 }
 
-/** The topics the host attributed to boundaries resolved by one anchor, order-stable and deduplicated. */
 function topicsThrough(state: ContextProjectionState, turnEndSeq: number): readonly string[] {
   const topics: string[] = []
   for (const boundary of state.boundaries) {
@@ -100,14 +76,9 @@ function topicsThrough(state: ContextProjectionState, turnEndSeq: number): reado
 
 /**
  * The structural anchors of one generation, newest first: resolved checkpoints,
- * resolved host boundaries, and — when asked for — its head.
- *
- * An unresolved anchor is not a candidate: a return target must be a turn the
- * log proved completed. An archived generation's head is not one either: "the
- * current working set" is precisely what that generation is not, and its marker
- * ref would be ambiguous across sources. Callers that only need to know whether
- * a prefix *exists* still see every candidate; truncating a list for display is
- * their own decision.
+ * resolved host boundaries, and — when asked for — its head. An unresolved
+ * anchor is not a candidate. An archived generation's head is not one either,
+ * because its marker ref would be ambiguous across sources.
  */
 export function anchorCandidates(
   state: ContextProjectionState,
@@ -123,15 +94,12 @@ export function anchorCandidates(
       source: 'checkpoint',
       seq: checkpoint.resultSeq,
       turnEndSeq: checkpoint.turnEndSeq,
-      topicsThrough: [],
+      topicsThrough: topicsThrough(state, checkpoint.turnEndSeq),
     })
   }
   for (const boundary of state.boundaries) {
     if (boundary.turnEndSeq === -1) continue
     candidates.push({
-      // The fold stores no boundary ref: it is derived here, from the source's
-      // own identity and the anchoring seq, which is what keeps two
-      // generations' identical seqs from colliding.
       ref: host.boundaryRefFor(state.sessionId, boundary.resultSeq),
       label: boundary.label,
       source: 'boundary',
@@ -155,30 +123,19 @@ export function anchorCandidates(
 }
 
 /**
- * Why one candidate is not a selectable return anchor, or `undefined` when it
- * is. The order is deliberate: what the anchor *is* decides before what it
- * costs, so a boundary carrying two topics never reads as a budget problem.
- *
- * The topic rule reads the anchor's retained prefix rather than the boundary's
- * own attributions, because that is what a return would carry: a boundary may
- * be the first place one topic's facts surfaced while an earlier boundary
- * already carried another's, and unwinding to it hands a successor a context
- * holding both. Every surface that offers a return anchor asks here, so the
- * timeline cannot offer a ref the rollover guard refuses; and the host's own
- * rule is asked between the shared ones, because only it can say which of its
- * boundary kinds closed a context instead of opening a topic.
+ * Why one candidate is not a selectable return anchor, or `undefined` when it is.
+ * What the anchor *is* decides before what it costs, so a boundary carrying two
+ * topics never reads as a budget problem.
  */
 export function anchorRejection(
   candidate: AnchorCandidate,
-  retainedTokens: number,
+  retainedTokens: number | undefined,
   sourceUsage: number | undefined,
   handoffAt: number,
   rule?: AnchorRule,
 ): string | undefined {
   if (candidate.source === 'head') return 'the head is the current working set; returning to it discards nothing'
   if (sourceUsage === undefined) {
-    // Never price an unknown as zero, and never let an unprovable budget look
-    // like an available target.
     return 'the source Session\'s context cost cannot be measured, so the return budget cannot be proven'
   }
   if (candidate.source === 'boundary') {
@@ -192,7 +149,7 @@ export function anchorRejection(
         : `multiple ${nouns} entered the context through this boundary; write a fresh handoff instead`
     }
   }
-  if (retainedTokens >= handoffAt) {
+  if (retainedTokens !== undefined && retainedTokens >= handoffAt) {
     return candidate.source === 'boundary'
       ? 'retained context would not materially shrink the working set'
       : 'retained context would be at or above the handoff budget'

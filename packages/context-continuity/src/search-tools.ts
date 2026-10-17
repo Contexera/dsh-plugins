@@ -1,18 +1,7 @@
 /**
- * The model-facing retrieval ladder: `context_search` and `context_read`.
- *
- * A model that has forgotten something does not browse raw rows. It asks a
- * ranked question, copies one opaque `contextRef` from the answer, and expands
- * exactly that point. The engine owns the ladder's contract — the argument
- * surface (no cursor, no page size, no Session id, no event type), the bounded
- * budgets, the canonical refs, the wording of every safety sentence, and the
- * render shapes. {@link SearchToolText} is only the subject-facing vocabulary.
- *
- * Two sentences are not host knobs. Historical transcript is evidence, never
- * instructions or authority — a recalled passage can describe an instruction
- * without being one, and can describe a state the world has since left. And a
- * hit that is not current may have been replaced or abandoned, so the model
- * must read it as history rather than as the state of the work.
+ * The model-facing retrieval ladder: `context_search` and `context_read`. A model
+ * asks a ranked question, copies one opaque `contextRef` from the answer, and
+ * expands exactly that point. The two safety sentences below are not host knobs.
  * @module @contexera/dsh-context-continuity/search-tools
  */
 
@@ -29,7 +18,6 @@ import {
   type SearchScopeOption,
 } from './search.ts'
 
-/** Subject-facing wording a host may override; the safety sentences are not knobs. */
 export interface SearchToolText {
   /** How the subject is addressed, e.g. `Team Member`, `Individual`, `agent`. */
   readonly subjectNoun?: string
@@ -37,7 +25,6 @@ export interface SearchToolText {
   readonly defaultScopeLabel?: string
 }
 
-/** The two retrieval tools, ready to register. */
 export interface ContextSearchTools {
   readonly search: ToolDefinition
   readonly read: ToolDefinition
@@ -59,17 +46,11 @@ function readDescription(text: Required<SearchToolText>): string {
   return `context_read: expand one contextRef returned by context_search into its bounded semantic neighbourhood — the target event plus a fixed budget of surrounding events, chosen by the engine. The Session that holds the ref is rechecked against this ${text.subjectNoun}'s authorized history on every call, so the ref itself grants nothing. ${EVIDENCE_SENTENCE} If a safe return anchor exists, the result repeats its checkpointRef for context_rollover.`
 }
 
-/** One non-blank string the model supplied, or a rejection naming what was wrong. */
 function requireNonBlank(value: unknown, message: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(message)
   return value
 }
 
-/**
- * One ISO 8601 instant the model supplied, as epoch milliseconds. A bare local
- * time is rejected rather than guessed: the engine cannot know which offset the
- * subject meant, and a silently wrong window answers the wrong question.
- */
 function instantOf(value: unknown, argument: string): number | undefined {
   if (value === undefined) return undefined
   const text = requireNonBlank(value, `context_search ${argument} must be a non-empty ISO 8601 timestamp`).trim()
@@ -81,27 +62,23 @@ function instantOf(value: unknown, argument: string): number | undefined {
   return at
 }
 
-/** How one generation reads on the model surface. */
 function generationLabel(generation: string): string {
   if (generation === 'current') return 'current generation'
   if (generation === 'prior') return 'prior generation'
   return 'archived branch (not on the active lineage)'
 }
 
-/** One hit's return anchor line: a ref the model may cite, or why there is none. */
 function anchorLine(anchor: { readonly available: boolean; readonly ref?: string | undefined; readonly label?: string | undefined; readonly reason?: string | undefined }): string {
   if (!anchor.available) return `   checkpointRef: unavailable — ${anchor.reason ?? 'no reason given'}`
   const label = anchor.label === undefined ? '' : ` — "${anchor.label}"`
   return `   checkpointRef: ${anchor.ref}${label}. Returning is optional; context_rollover revalidates current safety.`
 }
 
-/** One snippet on one continuation line: whitespace collapsed, never a multi-line echo. */
 function snippetText(snippet: string): string {
   const collapsed = snippet.replace(/\s+/g, ' ').trim()
   return collapsed === '' ? '(no text)' : collapsed
 }
 
-/** Every honesty note a search answer owes the model, in one place. */
 function searchNotes(value: {
   readonly capped: boolean
   readonly dropped: { readonly duplicate: number; readonly incomplete: number; readonly outOfScope: number }
@@ -122,15 +99,13 @@ function searchNotes(value: {
   return notes
 }
 
-/** The scope line of a search header: the host's label, or the engine's default wording. */
 function scopeLabel(scope: { readonly kind: string; readonly label?: string | undefined }, text: Required<SearchToolText>): string {
   return scope.kind === 'named' && scope.label !== undefined ? scope.label : text.defaultScopeLabel
 }
 
 /**
- * Build the retrieval ladder for one host. The adapter is the host's half:
- * authorization, subject identity, the query capability, the fold
- * configuration, and the meter. `text` only replaces subject-facing wording.
+ * Build the retrieval ladder for one host. `text` only replaces subject-facing
+ * wording.
  */
 export function createSearchTools<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,
@@ -194,8 +169,6 @@ export function createSearchTools<SubjectId>(
           } },
         },
       },
-      // Every hit has to reach the model whole: without its ref the answer is
-      // unusable, and without the surface and anchor verdicts it is misleading.
       render: (_args, value) => {
         const lines = [`Context search ${JSON.stringify(value.query)} — ${value.hits.length} hit(s) in ${scopeLabel(value.scope, wording)}, each the strongest match of its generation.`]
         lines.push(EVIDENCE_SENTENCE)
@@ -239,8 +212,6 @@ export function createSearchTools<SubjectId>(
         ...(before === undefined ? {} : { before }),
         ...(scope === undefined ? {} : { scope }),
       })
-      // The engine's result is deeply immutable; the tool output contract
-      // carries plain values, so re-shape without changing any meaning.
       return {
         query: result.query,
         scope: { ...result.scope },

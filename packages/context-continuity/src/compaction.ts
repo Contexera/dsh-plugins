@@ -1,31 +1,8 @@
 /**
- * In-place compaction: the mechanism behind `context_compact`.
- *
- * The Harness compaction engine replaces one surface span with a summary once a
- * caller names the span (`CompactionEngine.compactRegion`). Choosing the span is
- * this module's job, and the choice is the whole safety story:
- *
- * - a leading `system/message` is never inside the range;
- * - the newest `user/message` and everything after it stay verbatim, so a
- *   compaction can never swallow the instruction that asked for it;
- * - neither edge splits an assistant tool call from its result — the contract
- *   package's own pairing helpers decide that, never a rule of ours;
- * - the recent tail is priced through the scope's meter when the scope has one,
- *   so a scope without a meter still compacts, just less.
- *
- * Bounds taken from message roles are conservative, never exact: an empty
- * message projects to no message at all, so the derived history is never longer
- * than the surface node list, and a role-derived index is read as a node bound
- * in the direction that compacts less.
- *
- * The engine keeps the transaction. It revalidates both edges, takes the durable
- * compaction lock, summarizes, replaces the span on the surface, and leaves the
- * log append-only; a failure there keeps the original surface, which is why
- * nothing here has to be undone.
- *
- * Selection and price are one decision, read twice: {@link compactibleNow}
- * reports the same span to a status read that {@link compactContextRange} would
- * hand to the engine.
+ * In-place compaction: choosing the surface span a compaction may replace. A
+ * leading `system/message` is never inside the range, and the newest
+ * `user/message` and everything after it stay verbatim, so a compaction can
+ * never swallow the instruction that asked for it.
  * @module @contexera/dsh-context-continuity/compaction
  */
 
@@ -36,18 +13,14 @@ import type { Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ContextCompactible } from './timeline.ts'
 
-/** How much of the most recent surface a compaction keeps verbatim by default. */
 export const DEFAULT_COMPACT_RETAIN_TOKENS = 32 * 1024
 
-/** One priced surface node. */
 export interface SurfaceNodePrice {
-  /** Durable sequence number of the surface node. */
   readonly seq: SessionSeq
   /** Request-pressure tokens this node costs on the routed model. */
   readonly tokens: number
 }
 
-/** One measurement of a subject's current surface. */
 export interface SurfaceMeasurement {
   /** Current request-and-response pressure of the context. */
   readonly totalTokens: number
@@ -56,10 +29,9 @@ export interface SurfaceMeasurement {
 }
 
 /**
- * Prices one Session's current surface. This is structurally the Harness token
- * meter, named here so the engine can ask for a number without depending on the
- * meter package, and so a scope without a meter is a supported case rather than
- * a failure.
+ * Prices one Session's current surface. Structurally the Harness token meter,
+ * named here so the engine can ask for a number without depending on the meter
+ * package; a scope without a meter is a supported case.
  */
 export interface SurfaceMeter {
   measure(session: Session): SurfaceMeasurement | undefined
@@ -67,8 +39,7 @@ export interface SurfaceMeter {
 
 /**
  * The compaction capability in one scope, e.g. the Harness compaction engine
- * behind `ctx.compaction`. The narrow shape states what this module uses: the
- * engine decides everything else (validation, locking, summarization, commit).
+ * behind `ctx.compaction`.
  */
 export interface SubjectCompaction {
   /**
@@ -82,10 +53,9 @@ export interface SubjectCompaction {
 
 /**
  * The compaction capability a host resolved for one calling agent's scope.
- * Resolving it is the host's job: which composition supplies a compaction
- * engine, and behind which service realm, is host addressing the engine cannot
- * derive. The meter and the retention budget are optional — without them the
- * tool still compacts, keeping the newest instruction and everything after it.
+ * Resolving it is the host's job. The meter and the retention budget are
+ * optional; without them the tool still compacts, keeping the newest
+ * instruction and everything after it.
  */
 export interface ContextCompactionScope {
   readonly engine: SubjectCompaction
@@ -95,18 +65,15 @@ export interface ContextCompactionScope {
   readonly retainTokens?: number | undefined
 }
 
-/** One inclusive span of current surface positions, in surface order. */
 export interface CompactionRange {
   readonly start: SessionSeq
   readonly end: SessionSeq
 }
 
-/** What one selection decided: a span to compact, or why there is none. */
 export type CompactionSelection =
   | { readonly kind: 'range'; readonly range: CompactionRange }
   | { readonly kind: 'none'; readonly reason: string }
 
-/** What one compaction attempt did, or why it did nothing. */
 export type CompactionAttempt =
   | {
     readonly kind: 'compacted'
@@ -120,14 +87,12 @@ export type CompactionAttempt =
   }
   | { readonly kind: 'none'; readonly reason: string }
 
-/** How many system messages the derived history opens with. */
 function leadingSystemMessages(messages: readonly Message[]): number {
   let count = 0
   while (count < messages.length && messages[count]?.role === 'system') count += 1
   return count
 }
 
-/** The index of the newest user message in the derived history, when there is one. */
 function newestUserMessageIndex(messages: readonly Message[]): number | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index]?.role === 'user') return index
@@ -135,11 +100,6 @@ function newestUserMessageIndex(messages: readonly Message[]): number | undefine
   return undefined
 }
 
-/**
- * The meter's node prices, or undefined when they no longer describe the
- * current surface. A stale measurement is not a failure: it only costs the
- * retention budget, and every structural bound still holds without it.
- */
 function pricedNodes(session: Session, meter: SurfaceMeter | undefined): readonly SurfaceNodePrice[] | undefined {
   if (meter === undefined) return undefined
   const priced = meter.measure(session)?.nodes
@@ -154,12 +114,7 @@ function pricedNodes(session: Session, meter: SurfaceMeter | undefined): readonl
 
 /**
  * The largest older stretch of the current surface that may be compacted now, or
- * why nothing may be.
- *
- * The bounds are applied in this order: price the recent tail from the scope's
- * meter, pull the trailing cut back to the newest user message, then retreat it
- * to a cut the pairing helpers accept. Every step only shrinks the candidate
- * range, so a bound this module cannot read exactly can never widen it.
+ * why nothing may be. Every bound only shrinks the candidate range.
  */
 export function selectCompactionRange(
   session: Session,
@@ -170,12 +125,6 @@ export function selectCompactionRange(
   if (nodes.length === 0) return { kind: 'none', reason: 'this context has no surface yet' }
 
   const messages = session.deriveMessages()
-  // The range never starts on a `system/message`. Node types are not readable
-  // without the deprecated synchronous event readers, so the bound comes from
-  // the derived history: the leading system messages are the first ones, and
-  // every node that projects to no message at all sits before the node its own
-  // message names. Skipping both kinds is safe — an empty node has nothing to
-  // summarize — and the bound is exact whenever no node projects to nothing.
   const head = leadingSystemMessages(messages) + (nodes.length - messages.length)
   const instruction = newestUserMessageIndex(messages)
 
@@ -203,10 +152,6 @@ export function selectCompactionRange(
         : 'this context has nothing older than its newest instruction',
     }
   }
-  // The leading cut is balanced by construction — it follows a system message,
-  // an empty node, or the start of the surface — and the engine rejects an
-  // unbalanced range anyway. Checking here turns that rejection into our own
-  // reason instead of an exception.
   if (!toolPairingBalancedBefore(session, nodes[head]!)) {
     return { kind: 'none', reason: 'no safe cut keeps every tool call together with its result' }
   }
@@ -214,20 +159,12 @@ export function selectCompactionRange(
 }
 
 /**
- * What a compaction started now would replace, and what it would keep verbatim,
- * priced by the selection's own walk so a status read and the compaction it
- * announces cannot disagree. A host reports this as the timeline's
- * `compactible` field; this is the one place that computes it.
- *
- * Absent, rather than zero, when this scope cannot price its surface: "nothing
- * is compactible" and "this number is unknown" are different facts, and only
- * the first is worth showing.
+ * What a compaction started now would replace, and what it would keep verbatim.
+ * Absent, rather than zero, when this scope cannot price its surface.
  */
 export function compactibleNow(session: Session, scope: ContextCompactionScope): ContextCompactible | undefined {
   const meter = scope.meter
   if (meter === undefined) return undefined
-  // A stale measurement prices nothing, exactly as it does in the selection: the
-  // nodes it names are no longer the surface's, so the sum would be a fiction.
   const priced = pricedNodes(session, meter)
   if (priced === undefined) return undefined
   const total = priced.reduce((sum, node) => sum + node.tokens, 0)
@@ -237,8 +174,6 @@ export function compactibleNow(session: Session, scope: ContextCompactionScope):
   const nodes = session.surface.nodes
   const start = nodes.indexOf(selection.range.start)
   const end = nodes.indexOf(selection.range.end)
-  // The selection names nodes of this surface by construction; a miss means the
-  // surface moved under the read, and a guessed price is worse than none.
   if (start < 0 || end < start) return undefined
   return {
     compactibleTokens: priced.slice(start, end + 1).reduce((sum, node) => sum + node.tokens, 0),
@@ -247,12 +182,9 @@ export function compactibleNow(session: Session, scope: ContextCompactionScope):
 }
 
 /**
- * Compact one older stretch of the subject's context in place.
- *
- * Resolves with what was replaced, or with why nothing was; a rejection comes
- * from the engine and means the surface was left as it was. The span never
- * covers the newest instruction or anything after it, and never covers a
- * leading `system/message`.
+ * Compact one older stretch of the subject's context in place. Resolves with what
+ * was replaced, or with why nothing was; a rejection comes from the engine and
+ * means the surface was left as it was.
  */
 export async function compactContextRange(
   scope: ContextCompactionScope,

@@ -323,8 +323,8 @@ interface TimelineRenderItem {
   readonly label: string
   readonly source: string
   readonly kind?: string | undefined
-  readonly retainedTokens: number
-  readonly discardedTokens: number
+  readonly retainedTokens?: number | undefined
+  readonly discardedTokens?: number | undefined
   readonly affectedTopics: readonly string[]
   readonly restorable: boolean
   readonly reason?: string | undefined
@@ -414,7 +414,10 @@ function renderTimeline(value: {
     const verdict = item.restorable
       ? `restorable — ref: ${item.ref}`
       : `not restorable — ${item.reason ?? 'no reason given'} (anchor${run.length === 1 ? '' : 's'}: ${run.map(row => brief(row.ref)).join(', ')} — not selectable)`
-    lines.push(`- ${head} [source: ${item.source}${kind}] (retained ~${item.retainedTokens}, discarded ~${item.discardedTokens}; ${topics}) — ${verdict}`)
+    const sizes = item.retainedTokens === undefined || item.discardedTokens === undefined
+      ? 'cost unmeasurable'
+      : `retained ~${item.retainedTokens}, discarded ~${item.discardedTokens}`
+    lines.push(`- ${head} [source: ${item.source}${kind}] (${sizes}; ${topics}) — ${verdict}`)
     index = end
   }
   if (value.incompleteFrom !== undefined) {
@@ -514,7 +517,7 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
     name: CONTEXT_STATUS_TOOL_NAME,
     description: statusDescription(wording),
     parameters: {
-      limit: { type: 'number', description: 'Maximum number of items to return (default 12, at most 24).' },
+      limit: { type: 'number', description: 'Maximum number of items to return (default 12).' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
@@ -535,8 +538,8 @@ export function createContinuityTools(adapter: ContinuityToolAdapter, text: Cont
           label: { type: 'string', required: true },
           source: { type: 'string', required: true },
           kind: { type: 'string' },
-          retainedTokens: { type: 'number', required: true },
-          discardedTokens: { type: 'number', required: true },
+          retainedTokens: { type: 'number' },
+          discardedTokens: { type: 'number' },
           affectedTopics: { type: 'array', required: true, items: { type: 'string' } },
           restorable: { type: 'boolean', required: true },
           reason: { type: 'string' },

@@ -1,37 +1,13 @@
 /**
  * The checkpoint template: what a compaction summary is asked to preserve.
- *
- * Choosing the span is {@link module:@contexera/dsh-context-continuity/compaction
- * compaction}'s job; choosing what survives inside it is this module's. The two
- * belong to the same owner for one reason — this package already decides that a
- * stretch of context may be replaced, and a replacement is only as good as the
- * summary standing in for it. Leaving the wording to whichever engine a host
- * happens to mount means the safety story ends at the span boundary.
- *
- * The default template is measured rather than tasteful. Across the 133 real
- * compactions one deployment had accumulated by 2026-10-05, the stock
- * coding-session template spent 30% of every summary restating files and code
- * and 2% on the next step, and 41% of those summaries dropped who was waiting
- * on the subject. Files are the one thing a successor can always read back; an
- * obligation to another participant is not. So the sections below are ordered by
- * what cannot be reconstructed, and the two facts that corpus showed being lost
- * — whether a claim was verified or merely trusted, and which open loop the
- * subject owes someone — are asked for by name.
- *
- * A host may replace the whole text. It is one string rather than a section
- * list on purpose: the section skeleton is the part worth tuning, so freezing
- * it here would freeze the finding above into this package.
+ * A host may replace the whole text.
  * @module @contexera/dsh-context-continuity/compaction-template
  */
 
 /**
- * The default checkpoint instruction.
- *
- * Written to be delivered as the final user message after the replayed
- * conversation, so the summarizing call stays a genuine prefix of the request it
- * condenses and the provider's cache survives. It states its own output
- * structure because the text replaces a span the subject can no longer read:
- * a section it omits is not recoverable from anywhere else.
+ * The default checkpoint instruction. It is delivered as the final user message
+ * after the replayed conversation, so the summarizing call stays a genuine
+ * prefix of the request it condenses and the provider's cache survives.
  */
 export const DEFAULT_COMPACTION_TEMPLATE = [
   'You are now acting as a compaction engine for this agent. Condense the conversation ABOVE into a structured checkpoint that lets another generation of the same agent resume the work with nothing essential lost.',

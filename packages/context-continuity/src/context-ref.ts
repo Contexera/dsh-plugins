@@ -1,22 +1,14 @@
 /**
- * The one opaque handle for a remembered event: a canonical reference the model
- * copies from a search hit into a read.
- *
- * A context ref names `(sessionId, seq)` — the *canonical source* of an event,
- * never the generation it happened to be inherited into — and nothing else. It
- * carries no authority: a ref is data the model repeats, so every read
- * revalidates the named Session against the host's authorization on each call.
- * The prefix is the format version; a future codec gets a new one, because refs
- * already written into a live conversation must keep decoding the way they did.
+ * The opaque handle for a remembered event: a canonical reference naming
+ * `(sessionId, seq)`. It carries no authority. The prefix is the format version:
+ * refs already written into a live conversation must keep decoding as they did.
  * @module @contexera/dsh-context-continuity/context-ref
  */
 
 import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session'
 
-/** The prefix every context ref carries. */
 export const CONTEXT_REF_PREFIX = 'context-hit-'
 
-/** One decoded context ref: the Session that owns the event, and its seq. */
 export interface ContextRefTarget {
   readonly sessionId: SessionId
   readonly seq: SessionSeq
@@ -24,8 +16,6 @@ export interface ContextRefTarget {
 
 /**
  * One ref as prose may quote it: long enough to identify, never a payload dump.
- * Used wherever a message repeats a ref that is not a selection surface — a
- * rejection, or a timeline anchor the subject cannot return to.
  */
 export function brief(ref: string): string {
   return ref.length > 120 ? `${ref.slice(0, 120)}…` : ref

@@ -1,21 +1,8 @@
 /**
- * Search and read across everything a subject is authorized to remember.
- *
- * The engine owns the ladder — a bounded ranked search, then one expanded
- * neighbourhood — and every rule that makes its answers trustworthy: the
- * authorized set is host-derived and the model can only *select* inside it, a
- * hit is folded to the generation that actually recorded it, the same inherited
- * experience is never presented twice, and a return anchor is offered only from
- * the shared policy in {@link anchor.ts}. The host owns mechanism and domain:
- * which Sessions a subject may reach ({@link SearchScopeProvider}), the query
- * capability (`ctx.sessionQuery` in a Team or Harness host), the fold
- * configuration, and the token meter.
- *
- * Two absences are deliberate. There is no second index and no engine-side
- * cache of history: every answer is read from the host's own corpus. And there
- * is no cursor, page size, session id, or event-type knob on the model surface
- * — a capped answer says so and asks for a narrower query, because paging a
- * model through raw rows is the failure mode this ladder exists to avoid.
+ * Search and read across everything a subject is authorized to remember. The
+ * authorized set is host-derived and the model can only select inside it; a hit
+ * is folded to the generation that recorded it. There is no second index and no
+ * engine-side cache of history.
  * @module @contexera/dsh-context-continuity/search
  */
 
@@ -42,22 +29,18 @@ import { foldContextProjection, type ContextProjectionConfig } from './projectio
 import type { ContextProjectionState } from './projection-state.ts'
 import { DEFAULT_TIMELINE_ANCESTORS, type ContextTimelineSource } from './timeline.ts'
 
-/** How many canonical hits one search presents. */
 export const CONTEXT_SEARCH_RESULT_LIMIT = 8
 
-/** How many preceding events one context read expands around its target. */
 export const CONTEXT_READ_BEFORE = 4
 
-/** How many following events one context read expands around its target. */
 export const CONTEXT_READ_AFTER = 6
 
-/** The render budget for one expanded event: a longer one is excerpted and says so. */
 export const CONTEXT_READ_EVENT_CHARS = 1200
 
 /**
  * The query capability the engine uses, and nothing more of it: the Harness
  * session-query service satisfies this structurally, so a host passes
- * `ctx.sessionQuery` unchanged. Only the four reads the ladder needs are named.
+ * `ctx.sessionQuery` unchanged.
  */
 export interface ContextSearchPort {
   /** Cross-Session full-text search, one ranked strongest match per Session. */
@@ -70,7 +53,6 @@ export interface ContextSearchPort {
   readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
 }
 
-/** One named scope a host offers: the model may select it, never define it. */
 export interface SearchScopeOption {
   readonly scopeId: string
   readonly label: string
@@ -78,9 +60,8 @@ export interface SearchScopeOption {
 
 /**
  * Which Sessions a subject may search, answered by the host from subject
- * identity alone. The engine knows no workspace, team, or project: a named
- * scope is opaque here, and a model-supplied `scopeId` can only select among
- * what this provider already offered.
+ * identity alone. A named scope is opaque here, and a model-supplied `scopeId`
+ * can only select among what this provider already offered.
  */
 export interface SearchScopeProvider<SubjectId> {
   /** The default range: every Session the subject itself ever lived in. */
@@ -91,7 +72,6 @@ export interface SearchScopeProvider<SubjectId> {
   sessionsInScope?(subject: SubjectId, scopeId: string): readonly SessionId[] | Promise<readonly SessionId[]>
 }
 
-/** The scope a search actually ran against, as reported back to the model. */
 export type ContextSearchScope =
   | { readonly kind: 'owned' }
   | { readonly kind: 'named'; readonly scopeId: string; readonly label: string }
@@ -106,7 +86,6 @@ export interface ContextSearchAdapter<SubjectId> {
   subject(exec: ToolRunContext): SubjectId | Promise<SubjectId>
   /** The generation the subject lives in now: where the active lineage starts. */
   activeSessionId(exec: ToolRunContext): SessionId | Promise<SessionId>
-  /** Which Sessions that subject may ever search. */
   scope: SearchScopeProvider<SubjectId>
   /** The query capability, e.g. the host's `ctx.sessionQuery`. */
   query: ContextSearchPort
@@ -120,7 +99,6 @@ export interface ContextSearchAdapter<SubjectId> {
   maxAncestors?: number
 }
 
-/** One bounded search over the subject's authorized history. */
 export interface ContextSearchRequest {
   readonly exec: ToolRunContext
   /** Full-text query; the provider interprets it as data, never as FTS syntax. */
@@ -135,13 +113,11 @@ export interface ContextSearchRequest {
   readonly scope?: string
 }
 
-/** Where a remembered event's generation sits relative to the active lineage. */
 export type ContextHitGeneration = 'current' | 'prior' | 'archived'
 
 /**
- * The return anchor one hit carries: a ref `context_rollover` may accept, or
- * the reason no prefix of that history would contain the hit. An unavailable
- * anchor is never a synthesized ref.
+ * The return anchor one hit carries: a ref `context_rollover` may accept, or the
+ * reason no prefix of that history would contain the hit.
  */
 export type ContextHitAnchor =
   | { readonly available: true; readonly ref: string; readonly label: string }
@@ -158,7 +134,6 @@ export interface ContextSearchHit {
   readonly eventType: string
   /** ISO 8601 UTC. */
   readonly time: string
-  /** The provider's own surface verdict for the matched event. */
   readonly surface: SessionEventSurface
   /** The provider's bounded excerpt around the match. */
   readonly snippet: string
@@ -175,7 +150,6 @@ export interface ContextSearchDrops {
   readonly outOfScope: number
 }
 
-/** One bounded, deduplicated search answer. */
 export interface ContextSearchResult {
   readonly query: string
   readonly scope: ContextSearchScope
@@ -189,7 +163,6 @@ export interface ContextSearchResult {
   readonly lineageIncompleteAt?: { readonly sessionId: SessionId; readonly reason: string }
 }
 
-/** One expanded event of a neighbourhood. */
 export interface ContextReadEvent {
   readonly seq: number
   readonly type: string
@@ -202,7 +175,6 @@ export interface ContextReadEvent {
   readonly truncated: boolean
 }
 
-/** One remembered event expanded into its bounded neighbourhood. */
 export interface ContextReadResult {
   readonly sessionId: SessionId
   readonly seq: number
@@ -214,15 +186,12 @@ export interface ContextReadResult {
   readonly anchor: ContextHitAnchor
 }
 
-/** Read one remembered event and its bounded neighbourhood. */
 export interface ContextReadRequest {
   readonly exec: ToolRunContext
-  /** The Session named by a decoded `contextRef`. */
   readonly sessionId: SessionId
   readonly seq: number
 }
 
-/** One source read: the generation's log plus the fold every answer is read from. */
 interface ContinuitySource {
   readonly source: ContextTimelineSource
   readonly state: ContextProjectionState
@@ -230,7 +199,6 @@ interface ContinuitySource {
 
 type SourceRead = { readonly ok: true; readonly value: ContinuitySource } | { readonly ok: false; readonly reason: string }
 
-/** One provider hit, before the engine decides where it really came from. */
 type ProviderHit = {
   readonly sessionId: SessionId
   readonly seq: number
@@ -240,30 +208,20 @@ type ProviderHit = {
   readonly snippet: string
 }
 
-/** One hit folded to its canonical source. */
 type CanonicalHit = {
   readonly ok: true
-  /** The generation that recorded the event. */
   readonly sessionId: SessionId
   readonly seq: number
-  /** The matched generation, when the match turned out to be an inherited event. */
   readonly foldedFrom?: SessionId
-  /** Where the matched generation's own span begins, for the own-span retry. */
   readonly ownSpanFrom: number
 } | { readonly ok: false; readonly reason: string }
 
-/** One message a model may read: never a stack, never an unbounded provider dump. */
 function describeFailure(error: unknown): string {
   const message = (error instanceof Error ? error.message : String(error)).trim()
   if (message === '') return 'no reason given'
   return message.length > 300 ? `${message.slice(0, 300)}…` : message
 }
 
-/**
- * Per-call Session access: one read and one measurement per generation, shared
- * by the provenance walk, the active-lineage walk, and enrichment, so every
- * answer about one generation comes from one observation of it.
- */
 interface SessionAccess {
   source(sessionId: SessionId): Promise<SourceRead>
   measurement(source: ContextTimelineSource): Promise<SurfaceMeasurement | undefined>
@@ -313,11 +271,8 @@ function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec
       const pending = (async (): Promise<SurfaceMeasurement | undefined> => {
         if (adapter.measureSource === undefined) return undefined
         try {
-          // A measurement that prices no node prices no prefix either: it is an
-          // unknown, and an unknown is never offered as an affordable return.
           return usableMeasurement(await adapter.measureSource(source, exec))
         } catch {
-          // An unmeasured source is not a free one: the anchor policy refuses it.
           return undefined
         }
       })()
@@ -327,19 +282,12 @@ function sessionAccess<SubjectId>(adapter: ContextSearchAdapter<SubjectId>, exec
   }
 }
 
-/** The active lineage of one subject: the generations a return could enter. */
 interface ActiveLineage {
   readonly activeSessionId: SessionId
-  /** Session id to distance from the current generation; nearest is `0`. */
   readonly depth: ReadonlyMap<string, number>
   readonly incompleteAt?: { readonly sessionId: SessionId; readonly reason: string }
 }
 
-/**
- * Walk from the current generation through `parentSession`, bounded. A
- * generation that cannot be read ends the walk loudly: everything beyond it is
- * unknown, and an unknown generation must never be offered as a return target.
- */
 async function activeLineage<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,
   access: SessionAccess,
@@ -358,19 +306,11 @@ async function activeLineage<SubjectId>(
   return { activeSessionId, depth }
 }
 
-/** Which generation one canonical source is, seen from the active lineage. */
 function generationOf(sessionId: SessionId, lineage: ActiveLineage): ContextHitGeneration {
   if (String(sessionId) === String(lineage.activeSessionId)) return 'current'
   return lineage.depth.has(String(sessionId)) ? 'prior' : 'archived'
 }
 
-/**
- * Fold one provider hit to the generation that recorded it. A seeded generation
- * inherits its source's events at the same seqs, so an inherited hit is
- * canonicalized by following `parentSession` while the seq stays below that
- * generation's own start; deduplicating on the canonical source is what makes
- * one experience appear once across a lineage.
- */
 async function canonicalSource(
   access: SessionAccess,
   sessionId: SessionId,
@@ -396,8 +336,6 @@ async function canonicalSource(
       }
     }
     const parent = read.value.source.header.parentSession
-    // An inherited prefix with no parent to attribute it to is the log's own
-    // claim about its history; take the claim at face value rather than guess.
     if (parent === undefined) {
       return {
         ok: true,
@@ -418,16 +356,11 @@ async function canonicalSource(
   }
 }
 
-/** The event predicates one search's time window compiles to. */
 function timeFilters(after: number | undefined, before: number | undefined): readonly SessionEventMetadataFilter[] {
   if (after === undefined && before === undefined) return []
   return [{ kind: 'time', ...(after === undefined ? {} : { from: after }), ...(before === undefined ? {} : { to: before }) }]
 }
 
-/**
- * The authorized set of one search, or a refusal: an empty set never means "all
- * of them". A blank id is dropped rather than searched for.
- */
 function authorizedIds(ids: readonly SessionId[], what: string): readonly SessionId[] {
   const unique: SessionId[] = []
   const seen = new Set<string>()
@@ -443,7 +376,6 @@ function authorizedIds(ids: readonly SessionId[], what: string): readonly Sessio
   return unique
 }
 
-/** One resolved scope: the Sessions it authorizes and how to describe it. */
 interface ResolvedScope {
   readonly ids: readonly SessionId[]
   readonly idSet: ReadonlySet<string>
@@ -480,12 +412,6 @@ async function resolveScope<SubjectId>(
   }
 }
 
-/**
- * Everything the host authorizes this subject to read: its own history plus
- * every offered scope. A read takes no scope parameter, so it has to accept a
- * ref that a scoped search legitimately returned; the union is still entirely
- * host-derived, and the model can neither name it nor widen it.
- */
 async function readAuthorizedSessions<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,
   subject: SubjectId,
@@ -504,12 +430,6 @@ async function readAuthorizedSessions<SubjectId>(
   return set
 }
 
-/**
- * The nearest return anchor for one remembered event, or why there is none.
- * Only a generation on the active lineage can be entered again, and only from
- * an anchor whose completed turn actually contains the hit — otherwise the seed
- * would not include the experience the model asked to return to.
- */
 async function returnAnchorFor<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,
   access: SessionAccess,
@@ -547,8 +467,8 @@ async function returnAnchorFor<SubjectId>(
 
 /**
  * Search one subject's authorized history: ranked, canonicalized, deduplicated,
- * bounded, and enriched with a return anchor only where the shared policy
- * proves one.
+ * bounded, and enriched with a return anchor only where the shared policy proves
+ * one.
  */
 export async function searchContext<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,
@@ -560,8 +480,6 @@ export async function searchContext<SubjectId>(
   const access = sessionAccess(adapter, exec)
   const maxAncestors = Math.max(0, Math.trunc(adapter.maxAncestors ?? DEFAULT_TIMELINE_ANCESTORS))
   const handoffAt = await adapter.handoffAt(exec)
-  // The lineage is walked only once a hit has survived scope and provenance: an
-  // answer with nothing to label or enrich must not pay for the walk.
   let walked: Promise<ActiveLineage> | undefined
   const lineage = (): Promise<ActiveLineage> =>
     walked ??= activeLineage(adapter, access, exec, maxAncestors)
@@ -572,7 +490,6 @@ export async function searchContext<SubjectId>(
   const dropped = { duplicate: 0, incomplete: 0, outOfScope: 0 }
   let capped = false
 
-  /** Canonicalize one provider hit and keep it when it is an experience not yet shown. */
   async function admit(raw: ProviderHit): Promise<CanonicalHit> {
     if (!resolved.idSet.has(String(raw.sessionId))) {
       dropped.outOfScope += 1
@@ -611,9 +528,6 @@ export async function searchContext<SubjectId>(
     }
     const read = await access.source(within)
     if (!read.ok) throw new Error(`context_search within ${within} could not be read: ${read.reason}`)
-    // Deep-searching one generation means its own span: its inherited prefix is
-    // another generation's history, already covered by the broad search and
-    // attributed there by provenance folding.
     const page = await providerCall(() => adapter.query.searchEvents({
       sessionId: within,
       query: request.query,
@@ -645,8 +559,6 @@ export async function searchContext<SubjectId>(
         break
       }
       const canonical = await admit(item.bestMatch)
-      // A generation whose strongest match is inherited still gets its own later
-      // experience represented, rather than being swallowed by its ancestor's.
       if (canonical.ok && canonical.foldedFrom !== undefined && hits.length < CONTEXT_SEARCH_RESULT_LIMIT) {
         try {
           const own = await adapter.query.searchEvents({
@@ -678,7 +590,6 @@ export async function searchContext<SubjectId>(
   }
 }
 
-/** One provider call whose failure reaches the model as a readable sentence. */
 async function providerCall<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
@@ -689,9 +600,8 @@ async function providerCall<T>(operation: () => Promise<T>): Promise<T> {
 
 /**
  * Expand one remembered event into its bounded neighbourhood. The ref is
- * revalidated against the host's authorization on every call, the target is
- * always present, and the window is the engine's own budget — the model never
- * guesses raw event counts.
+ * revalidated against the host's authorization on every call, and the window is
+ * the engine's own budget: the model never guesses raw event counts.
  */
 export async function readContextHit<SubjectId>(
   adapter: ContextSearchAdapter<SubjectId>,

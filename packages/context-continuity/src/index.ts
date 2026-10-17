@@ -1,16 +1,7 @@
 /**
  * Context continuity: a subject's context lived as one continuous timeline
- * across many physical Session generations.
- *
- * A subject rolls forward into a fresh generation (`context_rollover`), returns
- * to a recorded anchor (`context_checkpoint` + rollover), reads where its
- * context stands (`context_status`), shortens the generation it is in without
- * leaving it (`context_compact`), recalls what it has forgotten
- * (`context_search` + `context_read`), and is told to prepare a handoff before
- * its context runs out (the context-pressure policy) — physically many Session
- * files, one continuous context in the subject's understanding. The engine owns
- * these mechanics generically; a host binds them to its own subject and domain
- * through {@link ContextContinuityHost} and {@link ContextSearchAdapter}.
+ * across many physical Session generations. A host binds the engine's mechanics
+ * to its own subject and domain.
  * @module @contexera/dsh-context-continuity
  */
 
@@ -113,11 +104,6 @@ export type {
   ContinuitySummaryResult,
 } from './compaction-engine.ts'
 
-/**
- * The return-anchor policy, exported so a host can ask the same question both
- * of its own surfaces do: the timeline read offers a ref, and a rollover guard
- * executed later against mutable state has to answer identically.
- */
 export { anchorCandidates, anchorRejection, retainedPrice } from './anchor.ts'
 export type { AnchorCandidate, AnchorReasonText, AnchorRule, AnchorSourceKind } from './anchor.ts'
 

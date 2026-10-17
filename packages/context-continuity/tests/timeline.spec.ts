@@ -265,6 +265,21 @@ describe('the current generation', () => {
     expect(timeline.items.every(item => item.sourceSessionId === undefined)).toBe(true)
   })
 
+  it('names the topics a return to a checkpoint would keep, not only the ones after it', async () => {
+    // One boundary in turn 1 and a checkpoint at turn 2's end: returning to the
+    // checkpoint keeps the boundary's facts, so the checkpoint row has to name
+    // them. A row that says "topics: none" there reads as an empty context.
+    const later = log(
+      turnStart(1),
+      notice('Thread: thread:aaaa-1111 arrival'),
+      turnEnd(1),
+      turnStart(2),
+      ...checkpoint(2, 'call-cp', 'anchor'),
+    )
+    const timeline = await readContextTimeline(requestOf({ current: sourceOf(CURRENT, later) }))
+    expect(itemOf(timeline, 'checkpoint')?.affectedTopics).toEqual(['thread:aaaa-1111'])
+  })
+
   it('never offers an anchor whose turn has not ended', async () => {
     const unresolved = log(turnStart(1), toolCall(1, 'call-open', CONTEXT_CHECKPOINT_TOOL_NAME, { name: 'unresolved' }), toolResult(1, 'call-open'))
     const timeline = await readContextTimeline(requestOf({ current: sourceOf(CURRENT, unresolved) }))
@@ -295,8 +310,8 @@ describe('pricing honesty', () => {
     ])
     expect(timeline.items[1]?.reason).toBe('the source Session\'s context cost cannot be measured, so the return budget cannot be proven')
     // The unknown is never rendered as a zero-cost target either.
-    expect(timeline.items[1]?.retainedTokens).toBe(0)
-    expect(timeline.items[1]?.discardedTokens).toBe(1000)
+    expect(timeline.items[1]?.retainedTokens).toBeUndefined()
+    expect(timeline.items[1]?.discardedTokens).toBeUndefined()
   })
 
   it('treats a measurement that prices no node as unmeasurable, not as a crash', async () => {

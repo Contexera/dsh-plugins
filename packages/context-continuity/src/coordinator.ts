@@ -1,27 +1,8 @@
 /**
- * The context-continuity coordinator: the one deep module that turns a
- * subject's successful `context_rollover` tool result into its next context
- * generation, and schedules the quiet follow-up owed to a resolved checkpoint.
- *
- * Authority split:
- * - the host's durable store owns the subject→Session binding and rollover audit;
- * - the Session log projection owns intent, checkpoints, and delivery state;
- * - this coordinator owns only process locks and is always reconstructible.
- *
- * The coordinator reacts exclusively after the successful `tool/result` is
- * durably appended — never inside a tool body — so a render/finalize failure
- * can never outrun result durability. The actual swap waits for the containing
- * turn to end and the Agent to be idle, captures later input so no
- * old-generation model request opens, and then defers to the host lifecycle
- * through {@link ContextContinuityHost.executeTransition}.
- *
- * The same capture serves a second, shorter-lived reason: a held step. A
- * pressure policy that answers `hold` rejected a step whose input is still
- * wanted, pending the rollover that the instruction beside it asked for. The
- * host arms the hold ({@link holdClaimedInput}); this coordinator owns the
- * latch that keeps the admission gate armed for that turn, and both exits from
- * it: a rollover carries the input into the next generation, and a turn that
- * ends with no rollover hands the input back once the driver converges.
+ * The context-continuity coordinator: turns a successful `context_rollover` tool
+ * result into the subject's next context generation. It owns only process locks
+ * and reacts only after the successful `tool/result` is durably appended, never
+ * inside a tool body.
  * @module @contexera/dsh-context-continuity/coordinator
  */
 
@@ -34,7 +15,6 @@ import type { ContextMessageCodec } from './message-codec.ts'
 import { continuationDelivered, type ContextCheckpointEntry, type ContextProjectionState, type PendingRolloverIntent } from './projection-state.ts'
 import type { TransitionPlan } from './types.ts'
 
-/** Result seq and handoff envelope carried from the projection's pending intent. */
 interface SubjectIntent {
   readonly toolCallId: string
   readonly resultSeq: number
@@ -44,20 +24,12 @@ interface SubjectIntent {
   readonly relatedFiles: readonly { readonly path: string; readonly reason: string }[]
 }
 
-/** One subject's in-process rollover bookkeeping; locks/promises only, never facts. */
 interface SubjectTransition {
   readonly agent: Agent
   readonly intent: SubjectIntent
   turnEnded: boolean
-  swapping?: Promise<void>
 }
 
-/**
- * Rebuild one subject's in-process intent from the projection's pending
- * rollover. Three call sites consume it — the live result, crash recovery with
- * the turn still open, and crash recovery past the turn end — and they must
- * agree field for field; this is the single definition of that list.
- */
 function intentFromPending(pending: PendingRolloverIntent): SubjectIntent {
   return {
     toolCallId: pending.toolCallId,
@@ -72,24 +44,7 @@ function intentFromPending(pending: PendingRolloverIntent): SubjectIntent {
 export class ContextContinuityCoordinator<SubjectId> {
   private readonly subjects = new Map<SubjectId, SubjectTransition>()
   private readonly capturedInput = new Map<SubjectId, readonly UserMessage[]>()
-  /**
-   * The Agents holding input for a requested rollover. A pressure policy that
-   * answers `hold` rejected a step whose messages are still in flight; while
-   * the hold is armed nothing may admit another, or the model would open a step
-   * against the context the hold exists to leave behind. The arm covers the
-   * held turn only — the instruction steered in the rejected step's place is
-   * the next thing the driver runs, and a host that checks the gate before its
-   * pressure policy must not reject that turn.
-   */
   private readonly holds = new Map<SubjectId, Agent>()
-  /**
-   * The checkpoint refs whose quiet continuation this process has scheduled but
-   * not yet seen delivered, grouped by subject. Grouping is what makes the
-   * lifecycle correct: a subject's latches are released as a unit when it stops
-   * being tracked, and a ref is stored as itself rather than concatenated with a
-   * subject id, so two subjects that use the same ref cannot suppress each
-   * other and no id containing the separator can collide with another.
-   */
   private readonly scheduledContinuations = new Map<SubjectId, Set<string>>()
   private disposed = false
 
@@ -105,9 +60,8 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Root `session/event` observer for subject Sessions. The store's dispatch
-   * carrier is untagged, so the host maps session ids to subjects and calls
-   * this for every subject event. All reactions are gated on the projection
-   * state, which itself only records successful durable pairs.
+   * carrier is untagged, so the host maps session ids to subjects and calls this
+   * for every subject event.
    */
   onSessionEvent(id: SubjectId, agent: Agent, event: SessionEvent): void {
     if (this.disposed) return
@@ -138,14 +92,10 @@ export class ContextContinuityCoordinator<SubjectId> {
   }
 
   /**
-   * Whether one Agent's pending transition requires the admission gate: a
-   * pending rollover must stop old-generation turns from admitting queued
-   * input. The gate arms only for the old-generation Agent instance — the new
-   * generation activates mid-swap and must be free to consume the handoff and
-   * carried input immediately.
-   *
-   * A held step arms the same gate for the same reason: the input that was kept
-   * has to be the input that comes back — and, as above, only for the held turn.
+   * Whether one Agent's pending transition requires the admission gate. The gate
+   * arms only for the old-generation Agent instance: the new generation
+   * activates mid-swap and must be free to consume the handoff and carried input
+   * immediately.
    */
   needsAdmissionGate(agent: Agent): boolean {
     const id = this.host.subjectForAgent(agent)?.id
@@ -154,10 +104,7 @@ export class ContextContinuityCoordinator<SubjectId> {
     return this.subjects.get(id)?.agent === agent
   }
 
-  /**
-   * Whether one Agent's subject is holding input for a requested rollover, and
-   * so admits no further step while its held turn is open.
-   */
+  /** Whether one Agent's subject is holding input for a requested rollover. */
   isHoldingInput(agent: Agent): boolean {
     const id = this.host.subjectForAgent(agent)?.id
     if (id === undefined) return false
@@ -166,9 +113,8 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Arm one subject's hold and keep the messages its rejected step had already
-   * claimed. Arming and capturing are one call on purpose: the capture is
-   * refused while no hold is armed, so a host that did these in the other order
-   * would drop exactly the input the hold exists to preserve.
+   * claimed. Arming and capturing are one call: the capture is refused while no
+   * hold is armed.
    */
   holdClaimedInput(agent: Agent, messages: readonly UserMessage[]): readonly UserMessage[] {
     const id = this.host.subjectForAgent(agent)?.id
@@ -179,41 +125,12 @@ export class ContextContinuityCoordinator<SubjectId> {
     return this.captureInput(agent, messages)
   }
 
-  /**
-   * The hold's fallback exit: hand the input it kept back to the subject as its
-   * next turn's input, unchanged. A hold whose rollover never came would
-   * otherwise reject every later step for good. The hold is dropped before the
-   * drain, so a second turn end can never deliver the same input twice.
-   */
   private returnHeldInput(id: SubjectId, agent: Agent): void {
     if (this.holds.get(id) !== agent) return
     this.holds.delete(id)
     this.handBackInput(id, agent, this.drainCapturedInput(id), 'the requested rollover did not happen; the held input is handed back unchanged')
   }
 
-  /**
-   * Deliver input whose context never came about back to the subject, as the
-   * next turn's input, unchanged. Two exits share it because they share the
-   * hazard: a hold whose rollover never came, and a swap the host rejected
-   * after the input had already been drained into the plan. Either way the
-   * messages were taken out of circulation for a generation that never ran, so
-   * without this hand-back they are simply gone.
-   *
-   * Wait for true idle, then queue the input as the next turn — the same
-   * discipline the rollover and continuation paths use: a next-turn message
-   * queued while the driver is still converging never latches a wake. Idle is
-   * also what makes the hold's exit answer the right turn: the instruction
-   * steered in the held step's place is the only pending input, so the driver
-   * runs it before converging and the model gets that turn to itself.
-   *
-   * Which Agent receives it is read at delivery, from the host's binding, never
-   * assumed from the capture. Between taking the input and delivering it the
-   * subject may have rolled over or been activated again, and the Agent the
-   * input was taken from is then an ancestor that would swallow it — which is
-   * the one outcome this whole path exists to prevent.
-   *
-   * @param why the first half of the log line, naming what did not happen.
-   */
   private handBackInput(id: SubjectId, agent: Agent, input: readonly UserMessage[], why: string): void {
     if (input.length === 0) return
     const failed = (error: unknown): void => {
@@ -238,13 +155,6 @@ export class ContextContinuityCoordinator<SubjectId> {
       if (this.disposed) return
       const current = this.host.agentForSubject(id)
       if (current === agent) {
-        // A rollover that landed while that turn ran is the input's other exit:
-        // it belongs to the swap, not to the generation the swap leaves behind.
-        // That covers a failed swap the host retried, and a hold answered by a
-        // rollover scheduled while this delivery was already waiting. The plan
-        // drains in the swap's own idle wait, which is registered after this
-        // one, so parking here is normally what lets that plan carry the input;
-        // a plan that has already drained leaves it to the next transition.
         if (this.subjects.has(id)) {
           keepForNext()
           return
@@ -253,14 +163,10 @@ export class ContextContinuityCoordinator<SubjectId> {
         return
       }
       if (current === undefined) {
-        // Nothing may run it now. Keep it for the generation the subject next
-        // runs, rather than waking an Agent that no longer answers for it.
         this.host.log(`${why}; no live Agent to hand it to, keeping it for the subject's next generation (${input.length} message(s), subject ${String(id)})`)
         keepForNext()
         return
       }
-      // The subject runs another Agent now: deliver at that Agent's own idle
-      // boundary — the same discipline this method owes the one it waited on.
       void current.whenIdle().then(() => {
         deliver(current)
       }, failed)
@@ -269,10 +175,8 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Capture the inbox messages queued for an old generation at its turn-stop
-   * boundary: real input is preserved verbatim for delivery after the handoff;
-   * ephemeral domain notices are dropped because the new generation rederives
-   * them. Removing them from the inbox lets the turn close cleanly instead of
-   * admitting another old-generation step.
+   * boundary. Ephemeral domain notices are dropped because the new generation
+   * rederives them.
    */
   captureQueuedInput(agent: Agent): readonly UserMessage[] {
     const id = this.host.subjectForAgent(agent)?.id
@@ -285,8 +189,7 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Capture messages a racing pre-step already claimed from the inbox before
-   * rejecting that old-generation step. A rejected step's claimed message is
-   * otherwise neither discarded nor re-emitted, so the gate preserves it here.
+   * rejecting that old-generation step.
    */
   captureClaimedInput(agent: Agent, messages: readonly UserMessage[]): readonly UserMessage[] {
     return this.captureInput(agent, messages)
@@ -305,16 +208,10 @@ export class ContextContinuityCoordinator<SubjectId> {
     return preserved
   }
 
-  /**
-   * Whether one Agent may have input kept for its subject: it holds the pending
-   * rollover, or the held step, or both. Either arm means the input this
-   * Agent was about to admit belongs to a context that must not run.
-   */
   private capturesFor(id: SubjectId, agent: Agent): boolean {
     return this.subjects.get(id)?.agent === agent || this.holds.get(id) === agent
   }
 
-  /** Drain the captured input of one subject for delivery after the handoff. */
   drainCapturedInput(id: SubjectId): readonly UserMessage[] {
     const captured = this.capturedInput.get(id) ?? []
     this.capturedInput.delete(id)
@@ -322,10 +219,8 @@ export class ContextContinuityCoordinator<SubjectId> {
   }
 
   /**
-   * Drop one subject's bookkeeping; the host calls this on dispose/removal.
-   * Its continuation latches go with it: a subject that is no longer tracked
-   * can never observe the delivery that would otherwise release them, so
-   * keeping them would be an unbounded leak keyed on dead subjects.
+   * Drop one subject's bookkeeping; the host calls this on dispose/removal. Its
+   * continuation latches go with it, or a dead subject's latches would leak.
    */
   stopTracking(id: SubjectId): void {
     this.subjects.delete(id)
@@ -349,26 +244,18 @@ export class ContextContinuityCoordinator<SubjectId> {
     const state = this.host.projectionForSubject(id, subject.sessionId)
     if (state?.pending === null || state === undefined) return
     const pending = state.pending
-    // React only to the intent's own result landing durably, and only once.
     if (pending.resultSeq !== event.seq) return
     if (this.subjects.has(id)) return
     this.subjects.set(id, { agent, intent: intentFromPending(pending), turnEnded: false })
   }
 
   private onTurnEnd(id: SubjectId, agent: Agent): void {
-    // Checkpoint continuations first: a turn that resolved checkpoints owes
-    // each of them exactly one quiet next-turn follow-up. The projection's
-    // continuations state deduplicates across restarts; this in-memory latch
-    // closes the same-process window between scheduling and the delivery event
-    // landing in the log.
     this.scheduleCheckpointContinuations(id, agent)
     const transition = this.subjects.get(id)
     if (transition !== undefined && !transition.turnEnded) {
       const subject = this.host.subjectForAgent(agent)
       if (subject !== undefined && transition.agent === agent) {
         transition.turnEnded = true
-        // Wait for true idle (the turn-end event fires before the driver fully
-        // converges), then perform the swap off the session-event dispatch path.
         void agent.whenIdle().then(() => {
           if (this.disposed) return
           const current = this.subjects.get(id)
@@ -382,19 +269,10 @@ export class ContextContinuityCoordinator<SubjectId> {
         return
       }
     }
-    // A pending or in-flight rollover is the hold's other exit: it carries the
-    // captured input into the next generation itself.
     if (this.subjects.has(id)) return
     this.returnHeldInput(id, agent)
   }
 
-  /**
-   * Claim the in-process latch for one resolved checkpoint continuation.
-   * Returns true when this caller won it, or false when the checkpoint never
-   * concluded a turn, was already delivered durably, or is latched already. The
-   * caller releases the latch on its own failure path and when the durable
-   * delivery event is observed.
-   */
   private claimContinuationLatch(id: SubjectId, state: ContextProjectionState, checkpoint: ContextCheckpointEntry): boolean {
     if (checkpoint.turnEndSeq === -1) return false
     if (continuationDelivered(state, checkpoint.checkpointRef)) return false
@@ -405,25 +283,13 @@ export class ContextContinuityCoordinator<SubjectId> {
     return true
   }
 
-  /**
-   * Release one latch. Called on the scheduling failure path and when the
-   * durable continuation event is observed, which is the moment the projection
-   * stops needing the in-process window.
-   */
   private releaseContinuationLatch(id: SubjectId, checkpointRef: string): void {
     const latched = this.scheduledContinuations.get(id)
     if (latched === undefined) return
     latched.delete(checkpointRef)
-    // Drop the empty Set as well, so a subject that keeps resolving checkpoints
-    // does not keep one entry per subject id it ever used.
     if (latched.size === 0) this.scheduledContinuations.delete(id)
   }
 
-  /**
-   * Release the latches a durable continuation notice just proved delivered.
-   * The projection folds the same event into `continuations`, so this only has
-   * to drop the in-process window the projection cannot see.
-   */
   private releaseDeliveredContinuations(id: SubjectId, event: SessionEvent & { type: 'user/message' }): void {
     if (this.scheduledContinuations.size === 0) return
     const checkpointRef = this.codec.continuationCheckpointRefOf(event.data)
@@ -431,14 +297,6 @@ export class ContextContinuityCoordinator<SubjectId> {
     this.releaseContinuationLatch(id, checkpointRef)
   }
 
-  /**
-   * Quiet follow-ups for checkpoints resolved by the turn that just ended. A
-   * successful `context_checkpoint` result concludes its turn; work continues
-   * in the next turn with one host-generated notice. The projection folds
-   * delivery, so a restart repairs a missing follow-up through
-   * repairContinuations without duplicating a delivered one; this live path
-   * latches per checkpoint in memory for the scheduling window.
-   */
   private scheduleCheckpointContinuations(id: SubjectId, agent: Agent): void {
     const subject = this.host.subjectForAgent(agent)
     if (subject === undefined) return
@@ -447,9 +305,6 @@ export class ContextContinuityCoordinator<SubjectId> {
     for (const checkpoint of state.checkpoints) {
       if (!this.claimContinuationLatch(id, state, checkpoint)) continue
       const checkpointRef = checkpoint.checkpointRef
-      // The continuation waits for true idle, then queues its own turn: the
-      // same discipline the rollover path uses (a next-turn message queued
-      // while the driver is still converging never latches a wake).
       void agent.whenIdle().then(() => {
         if (this.disposed) return
         try {
@@ -466,9 +321,6 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   private async performTransition(id: SubjectId, previousSessionId: SessionId, transition: SubjectTransition): Promise<void> {
     const identity = this.host.rolloverIdentity(previousSessionId, transition.intent.toolCallId)
-    // A hold that survived into the swap is answered by the swap itself: the
-    // captured input travels as carried input, and the successor generation
-    // starts ungated.
     this.holds.delete(id)
     const plan: TransitionPlan = {
       previousSessionId,
@@ -482,18 +334,11 @@ export class ContextContinuityCoordinator<SubjectId> {
       carriedInput: this.drainCapturedInput(id),
     }
     try {
-      // Inside the guard as well as the await: a host that throws before it
-      // returns a promise loses the swap just as completely.
-      const swap = this.host.executeTransition(id, plan)
-      transition.swapping = swap
-      await swap
+      await this.host.executeTransition(id, plan)
       this.subjects.delete(id)
     } catch (error) {
       this.host.log(`context rollover failed, leaving the previous generation recoverable: ${error instanceof Error ? error.message : String(error)} (subject ${String(id)})`)
       this.subjects.delete(id)
-      // The swap never ran, so the input it was to carry belongs to the
-      // generation still standing. It was drained into a plan that no longer
-      // exists, which is why it has to be handed back here.
       this.handBackInput(
         id,
         transition.agent,
@@ -505,8 +350,8 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Crash-recovery hook the host runs during subject activation: re-derive
-   * pending intent from the projection and finish a transition that a restart
-   * interrupted after the successful result was durable.
+   * pending intent from the projection and finish a transition a restart
+   * interrupted.
    */
   recoverPendingTransition(id: SubjectId, agent: Agent, sessionId: SessionId): void {
     if (this.disposed || this.subjects.has(id)) return
@@ -514,13 +359,9 @@ export class ContextContinuityCoordinator<SubjectId> {
     if (state?.pending === null || state === undefined) return
     const pending = state.pending
     if (pending.turnEndSeq === -1) {
-      // The containing turn never ended durably; treat the intent as still
-      // waiting and observe the live events from here.
       this.subjects.set(id, { agent, intent: intentFromPending(pending), turnEnded: false })
       return
     }
-    // The turn already ended before the crash; the Agent is idle at
-    // activation, so the swap can proceed directly.
     const transition: SubjectTransition = { agent, intent: intentFromPending(pending), turnEnded: true }
     this.subjects.set(id, transition)
     void this.performTransition(id, sessionId, transition)
@@ -528,10 +369,8 @@ export class ContextContinuityCoordinator<SubjectId> {
 
   /**
    * Crash-recovery for quiet continuations: schedule the follow-up for one
-   * resolved checkpoint exactly once when the result was durable but the
-   * delivery never landed. The projection's continuations state is the durable
-   * delivery record — a checkpoint whose delivery event exists in the log is
-   * never re-scheduled.
+   * resolved checkpoint when the result was durable but the delivery never
+   * landed. The projection's continuations state is the durable delivery record.
    */
   repairContinuations(agent: Agent, state: ContextProjectionState): void {
     if (this.disposed) return

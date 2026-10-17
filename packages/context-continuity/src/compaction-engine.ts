@@ -1,33 +1,8 @@
 /**
  * The continuity engine's compaction backend: the shipped engine with the
- * checkpoint template replaced.
- *
- * {@link DEFAULT_COMPACTION_TEMPLATE} states what a summary must preserve, but
- * stating it is not the same as being obeyed: summaries are written by whichever
- * engine a host mounts, and the shipped engine writes them from a template aimed
- * at a general coding session. Mounting this class instead is what makes the
- * template take effect, because it is the class that owns the summarization
- * call.
- *
- * Only `summarize()` differs from the base. Selection, retention, pricing, the
- * compaction lock, trigger policy and the replacement transaction are all
- * inherited unchanged — a subclass that changed those would be a different
- * backend, not a different template.
- *
- * The call is re-issued here rather than delegated. The base appends its own
- * directive to whatever input it is handed, so calling `super.summarize()` with
- * the Team template already appended would send both directives, and a model
- * follows the last one — the stock template would win silently. Re-issuing the
- * call is therefore not duplication for its own sake; it is the only way for
- * this template to be the final instruction. The cost is that the shape of that
- * auxiliary call is restated here, so a change to the base's summarization
- * sequence has to be mirrored. That coupling is the price of owning the wording,
- * and it is why this module is the one place in this package that knows a
- * concrete Harness backend.
- *
- * A host that mounts the shipped `@deepseek-ai/dsh-compaction-basic` row instead
- * keeps the shipped template. That stays a supported composition: nothing in
- * this package requires its own engine to be mounted.
+ * checkpoint template replaced. The summarization call is re-issued rather than
+ * delegated, because the base appends its own directive and a model follows the
+ * last one; that sequence is restated here and must track Harness releases.
  * @module @contexera/dsh-context-continuity/compaction-engine
  */
 
@@ -43,10 +18,9 @@ import { DEFAULT_COMPACTION_TEMPLATE } from './compaction-template.ts'
 import { pendingSummaryFor } from './pending-summary.ts'
 
 /**
- * The replayed conversation surface this engine condenses. Mirrors
- * `SummarizationInput` from the backend: the base hands its own instance to the
- * overridden method, and this package must not import that type's module path
- * (it is not an exported subpath of the published package).
+ * The replayed conversation surface this engine condenses. Mirrors the backend's
+ * `SummarizationInput`, which is not an exported subpath of the published
+ * package.
  */
 export interface ContinuitySummarizationInput {
   /** The conversation's tool schemas, reused for prefix-cache alignment; absent when the request carried none. */
@@ -55,7 +29,6 @@ export interface ContinuitySummarizationInput {
   readonly messages: readonly Message[]
 }
 
-/** Safe summary content plus the exact auxiliary call envelope recorded with it. */
 export type ContinuitySummaryResult = {
   readonly summary: ContentBlock[]
   readonly provider: string
@@ -67,39 +40,27 @@ export type ContinuitySummaryResult = {
   | { readonly rawOutput?: ContentBlock[]; readonly llmStreamCall?: never }
 )
 
-/** What the summarization call is routed to. */
 interface SummarizationTarget {
   readonly provider: string
   readonly model: string
   /**
-   * The effort the conversation itself was running, when that route named one.
-   *
-   * The auxiliary call must carry it: an adapter resolves its effort as
-   * `options.reasoningEffort ?? profile.reasoning`, so a request that names none
-   * falls back to the deployment's *profile default* — a level configured for
-   * whatever model that profile usually serves. When the conversation chose a
-   * different level, that default is not merely different but often one the
-   * conversation's own model does not support, and the request path refuses
-   * instead of clamping. The reduction the hard limit depends on then fails
-   * closed and the turn is blocked, on a model the conversation had been using
-   * successfully for every one of its own requests.
+   * The effort the conversation itself was running. An adapter resolves effort as
+   * `options.reasoningEffort ?? profile.reasoning` and refuses an unsupported
+   * level instead of clamping, so a call that names none can fail closed on a
+   * model the conversation itself was using successfully.
    */
   readonly reasoningEffort?: ReasoningEffortId | undefined
 }
 
 /**
  * The shipped compaction backend, summarizing through this package's template.
+ * Mount it wherever a host would mount `@deepseek-ai/dsh-compaction-basic`: the
+ * engine is a Cordis service under the same name, so a composition mounts
+ * exactly one of the two.
  *
- * Mount it wherever a host would mount `@deepseek-ai/dsh-compaction-basic`. The
- * engine is a Cordis service under the same name (`compaction`), so a
- * composition mounts exactly one of the two.
- *
- * The wording is a field rather than a config key on purpose. Cordis validates a
- * plugin's config against the `Config` schema it inherits, so a template key
- * would have to be added to the backend's schema — which this package cannot do
- * without taking a dependency on the schema library purely for that. A host that
- * wants different wording overrides the field in a subclass instead, which needs
- * no schema and no new dependency:
+ * The wording is a field rather than a config key because Cordis validates a
+ * plugin's config against the inherited `Config` schema. A host overrides it in
+ * a subclass:
  *
  * ```ts
  * class HouseStyle extends ContinuityCompactionEngine {
@@ -108,34 +69,13 @@ interface SummarizationTarget {
  * ```
  */
 export class ContinuityCompactionEngine extends BasicCompactionEngine {
-  /**
-   * The checkpoint instruction, sent as the final user message of the
-   * summarization call. A whole template rather than a section list, because the
-   * section skeleton is the part worth tuning.
-   */
+  /** The checkpoint instruction, sent as the final user message of the summarization call. */
   protected readonly template: string = DEFAULT_COMPACTION_TEMPLATE
 
   /**
    * Summarize the replayed region under this engine's template, or hand back the
-   * summary the subject wrote for this attempt.
-   *
-   * A subject-authored summary is returned as an **unmarked** result: the backend
-   * types allow a summarizer that identifies no `ctx.llm.stream()` call, which is
-   * exactly what this is, and the transaction records it as such rather than
-   * claiming a call that never happened. The routed target is still reported,
-   * because that is the route the subject was working on when it wrote the text.
-   *
-   * The routed target is resolved exactly as the base resolves it — configured
-   * summarization fields first, then the conversation's own last routed target,
-   * then the agent's options — so a subject whose route differs from the
-   * deployment default still summarizes on the model it is actually running.
-   *
-   * An effort the conversation chose travels with it. A summarization call that
-   * names none is not effort-free: the adapter substitutes its own profile
-   * default, which is a level chosen for the deployment rather than for this
-   * model — and the request path rejects an unsupported one rather than
-   * clamping it. So the one request the hard limit depends on can be refused on
-   * a model every ordinary request in the same turn was using happily.
+   * summary the subject wrote for this attempt. A subject-authored summary is
+   * returned unmarked, with no `ctx.llm.stream()` call identified.
    */
   protected override async summarize(
     input: ContinuitySummarizationInput,
@@ -190,22 +130,12 @@ export class ContinuityCompactionEngine extends BasicCompactionEngine {
   }
 }
 
-/**
- * Where the summarization call goes: the configured fields when the deployment
- * set both, otherwise the conversation's own last routed target, otherwise the
- * agent's configured pair. Mirrors the base's order, because a summary routed
- * somewhere other than the conversation it condenses would price and cache
- * differently from the request it stands in for.
- */
 function summarizationTarget(config: ResolvedConfig, agent: Agent): SummarizationTarget {
   if (config.summarizationProvider.length > 0) {
     return { provider: config.summarizationProvider, model: config.summarizationModel }
   }
   const routed = agent.session.requestHeader()?.config
   if (routed !== undefined && routed.provider.length > 0 && routed.model.length > 0) {
-    // An effort the adapter itself defaulted is not a conversation choice, and
-    // restoring it here would repeat exactly the failure this field prevents:
-    // the adapter would reject its own default against this same model.
     const chosen = agent.session.requestHeader()?.adapterDefaults?.reasoningEffort === true
       ? undefined
       : routed.reasoningEffort
@@ -228,7 +158,6 @@ function summarizationTarget(config: ResolvedConfig, agent: Agent): Summarizatio
   )
 }
 
-/** Map a terminal summarization finish to its fail-closed error. */
 function finishError(finish: FinishReason): Error | undefined {
   switch (finish.kind) {
     case 'error':
@@ -245,7 +174,6 @@ function finishError(finish: FinishReason): Error | undefined {
   }
 }
 
-/** Reject visual output and keep only text before the replacement is framed. */
 function summaryText(
   blocks: readonly ContentBlock[],
 ): Array<Extract<ContentBlock, { type: 'text' }>> {
@@ -256,12 +184,7 @@ function summaryText(
 }
 
 /**
- * The default export is what a preset can mount by name.
- *
- * The loader resolves an entry's `name` to a module and then takes **its default
- * export**; a namespace object is not a plugin shape, so a named export alone
- * cannot be mounted as `name: '@contexera/dsh-context-continuity/compaction-engine'`.
- * This mirrors `@deepseek-ai/dsh-compaction-basic`, which is mounted the same way
- * and therefore also default-exports its engine class.
+ * The default export is what a preset can mount by name: the loader takes a
+ * module's default export, and a namespace object is not a plugin shape.
  */
 export default ContinuityCompactionEngine

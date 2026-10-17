@@ -1,31 +1,8 @@
 /**
- * The context-continuity projection: the one fold that derives a Session's
- * continuity state from its durable events.
- *
- * The fold is a Harness `ProjectionDefinition`, so the framework owns the
- * drive — replay on attach, incremental application per committed event,
- * persistence, and cache invalidation — and this module owns only the pure
- * transition. Three rules hold every field here to the log alone:
- *
- * - `apply` never mutates: an event this unit does not care about returns the
- *   **same state reference**, because an unchanged reference is what tells the
- *   framework to do no downstream work at all.
- * - Nothing is read from outside the log. Durable refs are derived
- *   deterministically by the host from `(sessionId, callId)` or
- *   `(sessionId, seq)`, so a cold fold over stored events and the live
- *   incremental fold converge on exactly one state.
- * - One registration serves every Session. The framework keeps one unit per
- *   projection key, so the Session identity and the fork-inherited cut live in
- *   the state, seeded by `init` from the header — never in the definition's
- *   closure. Events below the cut are the ancestor's facts and stay folded
- *   under the ancestor's identity.
- *
- * The engine owns the universal structure — checkpoint records, the pending
- * rollover intent, quiet-continuation delivery, carry candidates, open calls,
- * and turn cursors. The one domain-specific dimension is
- * {@link ContextProjectionHost.domainBoundaryOf}: which events are worth
- * returning to, and what a boundary is attributable to, is the host's
- * judgement, delivered as a plain contribution.
+ * The context-continuity projection: the pure fold that derives a Session's
+ * continuity state from its durable events. `apply` never mutates, and an event
+ * this unit does not care about returns the same state reference: an unchanged
+ * reference is what tells the framework to do no downstream work.
  * @module @contexera/dsh-context-continuity/projection
  */
 
@@ -44,24 +21,18 @@ import type {
   PendingRolloverIntent,
 } from './projection-state.ts'
 
-/** The projection key this engine owns in `SessionProjectionStateMap`. */
 export const CONTEXT_CONTINUITY_PROJECTION_KEY = 'contextContinuity'
 
-/** The rollover tool name the engine folds by default. */
 export const CONTEXT_ROLLOVER_TOOL_NAME = 'context_rollover'
 
-/** The checkpoint tool name the engine folds by default. */
 export const CONTEXT_CHECKPOINT_TOOL_NAME = 'context_checkpoint'
 
 /**
  * The domain contribution for one event the engine could anchor on. The host
- * returns one only when the event is worth returning to; `seenTopics` lets it
- * decide what a *first* arrival is in its own terms (the Agent Team suppresses
- * every re-delivery of a Thread's facts; another host may never suppress).
+ * returns one only when the event is worth returning to.
  */
 export type DomainBoundaryInput = {
   readonly sessionId: string
-  /** Seq of the anchoring event. */
   readonly seq: number
   /** Turn the event landed in; -1 when the event carries no turn. */
   readonly turn: number
@@ -72,11 +43,9 @@ export type DomainBoundaryInput = {
   | { readonly source: 'tool-result'; readonly name: string; readonly arguments: string; readonly meta: unknown }
 )
 
-/** One host-contributed timeline boundary: what it is, how it reads, what it is about. */
 export interface DomainBoundaryContribution {
   /** Host-defined anchor kind, e.g. `team_message`, `loom_delivery`. */
   readonly kind: string
-  /** Model-facing display label. */
   readonly label: string
   /** Domain topics this boundary belongs to; recorded as seen once it lands. */
   readonly topics: readonly string[]
@@ -84,49 +53,32 @@ export interface DomainBoundaryContribution {
 
 /**
  * Everything the fold asks of a host: its durable ref naming, its judgement of
- * ephemeral notices, and its own timeline anchors. A host that also drives the
- * coordinator implements this beside {@link ContextContinuityHost}.
+ * ephemeral notices, and its own timeline anchors.
  */
 export interface ContextProjectionHost extends Pick<ContextContinuityHost<never>, 'isEphemeralNotice'> {
   /**
    * The durable, collision-resistant ref of one checkpoint, derived from the
-   * recording Session and the successful call id. Two Sessions repeating one
+   * recording Session and the successful call id: two Sessions repeating one
    * provider call id must produce two distinct refs.
    */
   checkpointRefFor(sessionId: string, toolCallId: string): string
   /**
    * The durable ref of one host boundary at one anchoring seq. Consecutive
    * generations repeat event seqs, so the Session identity must be part of the
-   * key or an ancestor's boundary would collide with this Session's.
-   *
-   * The fold stores no boundary refs — a candidate's ref is derived when the
-   * lineage read renders it, never persisted — so this names facts for that
-   * read, and the fold itself does not call it.
+   * key.
    */
   boundaryRefFor(sessionId: string, seq: number): string
-  /**
-   * Whether one open tool call is this host's own effect call — a call whose
-   * successful result may anchor a boundary. The engine tracks its own
-   * rollover and checkpoint calls without asking.
-   */
+  /** Whether one open tool call is this host's own effect call. */
   tracksCall?(name: string, raw: string): boolean
-  /** The host's boundary for one event, or undefined when the event anchors nothing. */
   domainBoundaryOf?(input: DomainBoundaryInput): DomainBoundaryContribution | undefined
   /**
    * Why one of this host's own boundaries may not be entered again, or
-   * `undefined` when it may. The engine applies every rule that holds for any
-   * subject — a boundary must resolve at a completed turn, the topics its
-   * retained prefix carries must be exactly one, and the budget must leave room
-   * — and asks this for the one rule no shared vocabulary can state: which of
-   * the host's own boundary kinds close a context rather than open a topic.
-   *
-   * Asked by both surfaces that offer a return anchor, so the timeline cannot
-   * offer a ref the rollover guard refuses.
+   * `undefined` when it may: which of the host's boundary kinds close a context
+   * rather than open a topic.
    */
   boundaryRestorableFor?(candidate: AnchorCandidate): string | undefined
 }
 
-/** How one fold reads the log: the codec it recognizes and the host it asks. */
 export interface ContextProjectionConfig {
   /** The codec recognizing this engine's own handoff and continuation envelopes. */
   readonly codec: ContextMessageCodec
@@ -138,8 +90,7 @@ export interface ContextProjectionConfig {
 
 /**
  * The Session one fold covers. Its identity keys every derived ref, and the
- * inherited cut is the length of the prefix a seeded Session repeated from the
- * ancestor generation it continues.
+ * inherited cut is the prefix length a seeded Session repeated from its ancestor.
  */
 export interface ContextFoldTarget {
   readonly sessionId: string
@@ -180,10 +131,9 @@ const domainBoundarySchema = z.object({
 }).strict()
 
 /**
- * The persisted-state contract. The framework validates a cached state with
- * this before seeding a fold from it, so a row written by an older shape is
- * discarded (the `stateVersion` bump is the deliberate version of the same
- * decision) rather than forward-applied into nonsense.
+ * The persisted-state contract. The framework validates a cached state with this
+ * before seeding a fold from it, so a row written by an older shape is
+ * discarded.
  */
 export const contextProjectionStateSchema: z.ZodType<ContextProjectionState> = z.object({
   sessionId: z.string().min(1),
@@ -205,7 +155,6 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   }
 }
 
-/** The empty state of one Session whose log carries no continuity fact yet. */
 export function emptyContextProjectionState(target: ContextFoldTarget): ContextProjectionState {
   return {
     sessionId: target.sessionId,
@@ -222,19 +171,12 @@ export function emptyContextProjectionState(target: ContextFoldTarget): ContextP
   }
 }
 
-/** The rollover call arguments the engine's own tool accepts. */
 interface RolloverArguments {
   readonly handoff: string
   readonly checkpointRef?: string | undefined
   readonly relatedFiles: readonly { readonly path: string; readonly reason: string }[]
 }
 
-/**
- * A model-supplied display string that must carry something. Blank prose is
- * treated as absent, exactly as the engine's own tool surface rejects it: a
- * handoff nobody can read back, or a checkpoint with no label to choose by,
- * must never enter the log as a fact.
- */
 const nonBlankString = z.string().refine(value => value.trim() !== '')
 
 const rolloverArgumentsSchema = z.object({
@@ -245,7 +187,6 @@ const rolloverArgumentsSchema = z.object({
 
 const checkpointArgumentsSchema = z.object({ name: nonBlankString }).passthrough()
 
-/** One parsed JSON argument object, or undefined when the call carried none. */
 function parseArguments(raw: string): unknown {
   try {
     return JSON.parse(raw) as unknown
@@ -254,11 +195,6 @@ function parseArguments(raw: string): unknown {
   }
 }
 
-/**
- * The rollover arguments one successful call carried. Unparsable or incomplete
- * arguments produce no intent: the fold never invents a handoff it cannot read
- * back, and the model's own call already failed loudly on the tool surface.
- */
 function parseRolloverArguments(raw: string): RolloverArguments | undefined {
   const parsed = rolloverArgumentsSchema.safeParse(parseArguments(raw))
   if (!parsed.success) return undefined
@@ -269,13 +205,11 @@ function parseRolloverArguments(raw: string): RolloverArguments | undefined {
   }
 }
 
-/** The display name one successful checkpoint call carried; a call without one records nothing. */
 function parseCheckpointName(raw: string): string | undefined {
   const parsed = checkpointArgumentsSchema.safeParse(parseArguments(raw))
   return parsed.success ? parsed.data.name : undefined
 }
 
-/** One pure transition plus everything it needs to name a fact. */
 function createStep(config: ContextProjectionConfig): (state: ContextProjectionState, event: SessionEvent) => ContextProjectionState {
   const { codec, host } = config
   const rolloverToolNames = config.rolloverToolNames ?? [CONTEXT_ROLLOVER_TOOL_NAME]
@@ -283,7 +217,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
 
   const isRolloverCall = (name: string): boolean => rolloverToolNames.includes(name)
 
-  /** Attach one host contribution as a timeline boundary, remembering its topics. */
   const withContribution = (
     state: ContextProjectionState,
     contribution: DomainBoundaryContribution,
@@ -315,26 +248,15 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
   ): ContextProjectionState => {
     const message = event.data.message
     const index = state.openCalls.findIndex(call => call.callId === message.toolCallId)
-    // An unpaired result (no matching open call) touches nothing: the engine
-    // only ever reacts to calls it decided to track.
     if (index === -1) return state
     const recorded = state.openCalls[index]!
     const openCalls = state.openCalls.filter(call => call.callId !== message.toolCallId)
-    // A landed result — success or failure — consumes its paired open call, so
-    // a failed call can never dangle, and a provider retry reusing the call id
-    // pairs its fresh result with fresh arguments. Only a successful pair
-    // records a checkpoint, an intent, or a boundary.
     if (message.isError === true || event.data.error !== undefined) return { ...state, openCalls }
     const seq = event.seq
     const turn = event.data.turn
     if (isRolloverCall(recorded.name)) {
       const parsed = parseRolloverArguments(recorded.arguments)
       if (parsed === undefined) return { ...state, openCalls }
-      // One pending intent per unresolved turn: a second successful call inside
-      // the same turn replaces nothing, because the first owns the swap. An
-      // intent whose turn already ended is ready, not spent — only once the
-      // in-process lock is gone can a later-turn success replace it, which is
-      // the retry path that recovers a subject whose swap never came.
       if (state.pending !== null && state.pending.turnEndSeq === -1) return { ...state, openCalls }
       const pending: PendingRolloverIntent = {
         handoff: parsed.handoff,
@@ -373,13 +295,10 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
     return withContribution({ ...state, openCalls }, contribution, seq, turn)
   }
 
-  /** One inbox splice: real input queued behind a pending intent becomes a carry candidate. */
   const applyInboxSpliced = (
     state: ContextProjectionState,
     inserted: readonly UserMessage[],
   ): ContextProjectionState => {
-    // Without a pending intent nothing can be carried: the input is ordinary
-    // queued work the current generation will consume itself.
     if (state.pending === null || inserted.length === 0) return state
     const fresh: CarriedCandidate[] = []
     for (const message of inserted) {
@@ -397,10 +316,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
     event: SessionEvent & { type: 'user/message' },
   ): ContextProjectionState => {
     let next = state
-    // A surfaced candidate is NOT consumed yet: the loop appends the
-    // `user/message` before the step runs, so a cancellation can still land
-    // between them. Only a completed, uninterrupted assistant answer for the
-    // same turn proves the old generation handled it.
     const surfaced = next.carriedCandidates.some(candidate => !candidate.consumed && candidate.messageId === event.data.id)
     if (surfaced) {
       next = {
@@ -420,9 +335,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
       message: event.data,
     })
     if (contribution !== undefined) next = withContribution(next, contribution, event.seq, next.lastTurn)
-    // The quiet continuation delivered for one checkpoint completes that
-    // checkpoint's delivery state; a replay reads this to avoid re-scheduling
-    // a continuation the log already proves was delivered.
     const continuationRef = codec.continuationCheckpointRefOf(event.data)
     if (continuationRef === undefined) return next
     const existing = next.continuations.find(entry => entry.checkpointRef === continuationRef)
@@ -437,7 +349,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
     return { ...next, continuations: [...next.continuations, { checkpointRef: continuationRef, deliveredSeq: event.seq }] }
   }
 
-  /** A completed, uninterrupted assistant turn answers every candidate surfaced into it. */
   const applyAssistantMessage = (
     state: ContextProjectionState,
     event: SessionEvent & { type: 'assistant/message' },
@@ -452,7 +363,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
     return changed ? { ...state, carriedCandidates } : state
   }
 
-  /** One turn end resolves every open anchor it contains and becomes the timeline head. */
   const applyTurnEnd = (
     state: ContextProjectionState,
     seq: SessionSeq,
@@ -478,10 +388,6 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
   }
 
   return (state, event) => {
-    // A seeded Session's log opens with the ancestor generation's events. They
-    // are that generation's facts — folding them here would key its checkpoints
-    // to this Session and arm its rollover intent as this one's pending swap —
-    // so everything below the cut returns the same state reference.
     if (event.seq < state.inheritedEventCount) return state
     switch (event.type) {
       case 'tool/call': {
@@ -510,8 +416,7 @@ function createStep(config: ContextProjectionConfig): (state: ContextProjectionS
 
 /**
  * Cold-fold one immutable event log into its continuity state, with exactly the
- * transition the live unit uses. The target names the Session the log belongs
- * to and, for a seeded generation, how much of its opening is the ancestor's.
+ * transition the live unit uses.
  */
 export function foldContextProjection(
   events: readonly SessionEvent[],
@@ -527,14 +432,12 @@ export function foldContextProjection(
 /**
  * The host-only projection unit for one subject's Sessions. No wire view is
  * published: the state is read through `ctx.sessionProjections.stateOf(session,
- * key)`, and the derived client surface (timeline candidates) belongs to a
- * later increment.
+ * key)`.
  *
- * Register it **once per host**: the framework keeps one unit per projection
- * key and drives it for every Session, so the definition closes over no Session
+ * Register it once per host: the framework keeps one unit per projection key and
+ * drives it for every Session, so the definition closes over no Session
  * identity. `init` records the header's id and its fork-inherited prefix length
- * in the state, which is what keys every ref to the right generation and keeps
- * a seeded successor from adopting its ancestor's facts.
+ * in the state.
  */
 export function createContextProjectionDefinition(
   config: ContextProjectionConfig,
@@ -542,9 +445,6 @@ export function createContextProjectionDefinition(
   const step = createStep(config)
   return {
     key: CONTEXT_CONTINUITY_PROJECTION_KEY,
-    // v2: the state carries the Session identity it folds and the fork-inherited
-    // cut, so one registration serves every Session. A v1 row carries neither
-    // and is discarded by `stateSchema` instead of being folded onward.
     stateVersion: 2,
     stateSchema: contextProjectionStateSchema,
     init: (header: SessionHeader, inheritedEventCount: SessionLogOffset): ContextProjectionState =>

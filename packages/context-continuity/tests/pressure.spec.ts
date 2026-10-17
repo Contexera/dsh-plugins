@@ -79,9 +79,14 @@ function turnEnd(seq: number, idleMs: number): SessionEvent {
   return { type: 'turn/end', seq: SessionSeq(seq), time: Date.now() - idleMs, data: { turn: 1, reason: { kind: 'completed' } } } as unknown as SessionEvent
 }
 
-/** One completed in-place compaction, the durable record that the content was replaced. */
-function compactionEnd(seq: number): SessionEvent {
-  return { type: 'compaction/end', seq: SessionSeq(seq), time: 0, data: { compactionId: 'c1', turn: 1 } } as unknown as SessionEvent
+/** One in-place compaction transaction record. `failed` writes the error the failed close carries. */
+function compactionEnd(seq: number, failed = false): SessionEvent {
+  return { type: 'compaction/end', seq: SessionSeq(seq), time: 0, data: { compactionId: 'c1', turn: 1, ...(failed ? { error: 'the summarization call failed' } : {}) } } as unknown as SessionEvent
+}
+
+/** One model-free tool-result prune, which replaces surface nodes with no compaction event. */
+function compactionPrune(seq: number): SessionEvent {
+  return { type: 'compaction/prune', seq: SessionSeq(seq), time: 0, data: { replacedTokens: 500, retainedTokens: 100 } } as unknown as SessionEvent
 }
 
 /** One subject's durable log, numbered by position as the Session contract requires. */
@@ -318,6 +323,20 @@ describe('the pressure ladder: budget, notice, limit', () => {
     // is quiet: re-arming means one notice per context, not one per call.
     expect((await policy.onPreStep('subject-1', signal())).kind).toBe('continue')
     expect(host.steered).toHaveLength(1)
+  })
+
+  it('a failed compaction leaves the surface as it was, so the notice is not stale evidence', async () => {
+    const host = new FakeHost()
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    host.log = span('session-1', 0, turnStart(0, 90_000), noticeEvent(1), turnEnd(2, 60_000), compactionEnd(3, true), turnStart(4, 0))
+    expect((await policyFor(host).onPreStep('subject-1', signal())).kind).toBe('continue')
+  })
+
+  it('a tool-result prune replaces surface content, so a notice sent into it does not count', async () => {
+    const host = new FakeHost()
+    host.limits = { usageTokens: 210_000, hardLimit: 256_000, handoffAt: 200_000 }
+    host.log = span('session-1', 0, turnStart(0, 90_000), noticeEvent(1), turnEnd(2, 60_000), compactionPrune(3), turnStart(4, 0))
+    expect((await policyFor(host).onPreStep('subject-1', signal())).kind).toBe('notice')
   })
 
   it('a notice recorded after the compaction is what latches, and an older one is history', async () => {
