@@ -3,8 +3,7 @@
  *
  * These are the vendor's shapes for `POST {apiBase}/systemone`, not a local
  * invention. A question is `noul`, `choice` or `score`; answers come back under
- * the ids the caller chose. This package adds no vocabulary of its own and
- * interprets nothing: it transports questions and returns answers.
+ * the ids the caller chose.
  * @module @contexera/dsh-jev/contracts
  */
 
@@ -31,9 +30,7 @@ export type JevEntry = string | Readonly<Record<string, unknown>> | readonly unk
  * one side of the question is still transportable.
  */
 export interface JevNoulCriteria {
-  /** What counts as a yes. */
   readonly 'true'?: JevEntry | undefined
-  /** What counts as a no. */
   readonly 'false'?: JevEntry | undefined
 }
 
@@ -45,7 +42,6 @@ export interface JevNoulCriteria {
 export interface JevNoulQuestion {
   readonly type: 'noul' | 'boolean'
   readonly instructions: JevEntry
-  /** What a yes and a no mean, when the wording alone does not settle it. */
   readonly criteria?: JevNoulCriteria | undefined
 }
 
@@ -78,12 +74,9 @@ export interface JevScoreQuestion {
   readonly criteria: readonly JevEntry[]
 }
 
-/** One typed question, keyed by the id the caller chooses. */
 export type JevQuestion = JevNoulQuestion | JevChoiceQuestion | JevScoreQuestion
 
-/** One evaluation: a state, the questions asked about it, and an optional cancellation. */
 export interface JevRequest {
-  /** The content to evaluate. */
   readonly state: JevState
   /** Questions keyed by the id their answers come back under; at least one. */
   readonly questions: Readonly<Record<string, JevQuestion>>
@@ -96,7 +89,6 @@ export interface JevRequest {
   readonly signal?: AbortSignal | undefined
 }
 
-/** An answer to a {@link JevChoiceQuestion}: the chosen key, every key's probability, and confidence. */
 export interface JevChoiceAnswer {
   readonly type: 'choice'
   /** The option with the highest probability. */
@@ -107,14 +99,12 @@ export interface JevChoiceAnswer {
   readonly confidence: number
 }
 
-/** An answer to a {@link JevNoulQuestion}: the probability that the answer is yes. */
 export interface JevNoulAnswer {
   readonly type: 'noul'
   /** Probability the answer is yes, 0 to 1. Carries no `confidence` of its own. */
   readonly noul: number
 }
 
-/** An answer to a {@link JevScoreQuestion}: the position on the scale and confidence. */
 export interface JevScoreAnswer {
   readonly type: 'score'
   /** Position on the level number line, which can fall between two levels. */
@@ -138,10 +128,8 @@ export interface JevScoreAnswer {
 export type JevAnswer = JevChoiceAnswer | JevNoulAnswer | JevScoreAnswer
 
 /**
- * The vendor's response, passed through unmodified. `model` and `usage` are
- * kept because both are load-bearing for a caller: `model` reports the
- * versioned id that actually answered, which is what makes a pinned `model`
- * configuration verifiable, and `usage` carries the call's cost.
+ * The members of the vendor's response this package returns. Fields the vendor
+ * adds beyond these are dropped, not forwarded.
  */
 export interface JevResult {
   /** The versioned model id that answered, e.g. `jev-1.13.0`. */

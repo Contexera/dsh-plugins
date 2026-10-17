@@ -17,12 +17,6 @@ export interface StubTransport {
   readonly count: () => number
 }
 
-/**
- * Answer each attempt from a script, recording what was asked.
- *
- * @param respond — called with the attempt number, counting from 1.
- * @returns the transport, its recorded attempts, and their count.
- */
 export function stubTransport(
   respond: (attempt: number, request: JevTransportRequest) => JevTransportResponse | Promise<JevTransportResponse>,
 ): StubTransport {
@@ -34,10 +28,6 @@ export function stubTransport(
   return { transport, attempts, count: () => attempts.length }
 }
 
-/**
- * A transport that never answers on its own, and rejects when its attempt is
- * aborted — how the platform's `fetch` behaves when a signal fires.
- */
 export function stallingTransport(): JevTransport {
   return request =>
     new Promise((_resolve, reject) => {

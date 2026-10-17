@@ -147,13 +147,6 @@ describe('parseResponse', () => {
   })
 })
 
-/**
- * The declared members are this package's promise to a consumer: `noul` is a
- * probability a threshold can be applied to, and `choice`/`score` carry a
- * distribution and a confidence. These tests pin that each declared member is
- * checked, that an extra vendor field is not a failure, and that a malformed
- * answer never reaches a caller as a typed success.
- */
 describe('parseResponse answer member validation', () => {
   const NOUL: Readonly<Record<string, JevWireQuestion>> = {
     speak: { type: 'noul', instructions: 'should the assistant say something?' },

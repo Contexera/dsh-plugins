@@ -1,19 +1,13 @@
 /**
  * The Jev service: one evaluation call, its configuration, and the retry policy
  * around it.
- *
- * The service holds no policy of its own. It does not threshold a confidence,
- * gate a decision, choose a posture, or decide that a failure means "quiet": it
- * sends the questions it is given, returns the vendor's answers, and raises a
- * typed {@link JevError} when there are none. A caller that needs a default for
- * a failed judgement is the one that decides what the default is.
  * @module @contexera/dsh-jev/service
  */
 
 import { Service, type Context, type Logger } from '@deepseek-ai/cordis'
 import type { JevRequest, JevResult } from './contracts.ts'
 import { JevError, errorText, redact, snippet } from './errors.ts'
-import { buildWireBody, type JevWireBody } from './request.ts'
+import { buildWireBody, serializeWireBody, type JevWireQuestion } from './request.ts'
 import { parseResponse } from './response.ts'
 import { fetchTransport, type JevTransport, type JevTransportResponse } from './transport.ts'
 
@@ -39,7 +33,6 @@ export const DEFAULT_MODEL = 'jev-1.13.0'
 /** The environment variable the API key is read from unless `apiKeyEnv` names another. */
 export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
 
-/** How long one attempt may take before it is abandoned, in milliseconds. */
 export const DEFAULT_TIMEOUT_MS = 30_000
 
 /** How many attempts one call may take, the first one included. */
@@ -48,13 +41,10 @@ export const DEFAULT_ATTEMPTS = 3
 /** The wait before the second attempt, in milliseconds; it doubles per further attempt. */
 export const DEFAULT_RETRY_DELAY_MS = 500
 
-/** The longest this service waits between attempts, in milliseconds. */
 export const DEFAULT_MAX_RETRY_DELAY_MS = 30_000
 
-/** The one endpoint this package calls. */
 export const SYSTEM_ONE_PATH = '/systemone'
 
-/** How the service is built; the plugin row, or a test, supplies it. */
 export interface JevConfig {
   /** Endpoint base — the vendor's own by default, an OpenRouter-style base when that is what the deployment uses. Default {@link DEFAULT_API_BASE}. */
   readonly apiBase?: string
@@ -80,7 +70,6 @@ export interface JevConfig {
 export interface ResolvedJevConfig {
   /** The absolute endpoint URL. */
   readonly url: string
-  /** The model id sent with every call. */
   readonly model: string
   /** The API key, from configuration or the named environment variable. */
   readonly apiKey: string
@@ -90,13 +79,10 @@ export interface ResolvedJevConfig {
   readonly attempts: number
   /** The first backoff, in milliseconds. */
   readonly retryDelayMs: number
-  /** The longest wait between attempts, in milliseconds. */
   readonly maxRetryDelayMs: number
-  /** The transport every attempt goes through. */
   readonly transport: JevTransport
 }
 
-/** One attempt's outcome: the parsed result, or the failure and when to try again. */
 type JevAttempt =
   | { readonly ok: true; readonly result: JevResult }
   | { readonly ok: false; readonly error: JevError; readonly retryAfterMs: number | undefined }
@@ -130,7 +116,6 @@ export function resolveConfig(
   }
 }
 
-/** Read one configured string, or its default. */
 function readString(value: string | undefined, fallback: string, field: string): string {
   const text = value ?? fallback
   if (typeof text !== 'string' || text.trim() === '') {
@@ -139,7 +124,6 @@ function readString(value: string | undefined, fallback: string, field: string):
   return text
 }
 
-/** Read one configured whole number, or its default. */
 function readInteger(value: number | undefined, fallback: number, field: string, minimum: number): number {
   if (value === undefined) return fallback
   if (!Number.isInteger(value) || value < minimum) {
@@ -148,7 +132,6 @@ function readInteger(value: number | undefined, fallback: number, field: string,
   return value
 }
 
-/** Build the absolute endpoint URL from a configured base. */
 function endpointUrl(apiBase: string | undefined): string {
   const base = apiBase ?? DEFAULT_API_BASE
   let url: URL
@@ -166,7 +149,6 @@ function endpointUrl(apiBase: string | undefined): string {
   return url.href.replace(/\/+$/u, '') + SYSTEM_ONE_PATH
 }
 
-/** Find the API key, or refuse to build a service that could never authenticate. */
 function readApiKey(
   apiKey: string | undefined,
   apiKeyEnv: string,
@@ -181,15 +163,10 @@ function readApiKey(
 
 /** The Jev service, registered as `ctx.jev` for as long as its plugin is loaded. */
 export class Jev extends Service {
-  /** The endpoint, model, bounds and transport every call uses. */
   private readonly resolved: ResolvedJevConfig
-  /** This service's own log line, for the retries a caller never sees. */
   private readonly log: Logger
 
   constructor(ctx: Context, config: JevConfig = {}) {
-    // Resolved before `super()` on purpose: a configuration failure must not
-    // leave a half-built service registered as `ctx.jev` for the moment between
-    // the two statements.
     const resolved = resolveConfig(config)
     super(ctx, 'jev')
     this.resolved = resolved
@@ -199,22 +176,18 @@ export class Jev extends Service {
   /**
    * Evaluate one set of questions against one state.
    *
-   * The call is sent with the configured model. A transport failure, an attempt
-   * timeout, or a status the endpoint documents as transient is retried after a
-   * backoff, up to the configured attempt count; a `retry-after` the endpoint
-   * sent is honored inside `maxRetryDelayMs`. A cancellation is never retried:
-   * the caller's decision to stop outranks this service's judgement that a
-   * failure was transient.
+   * A transport failure, an attempt timeout, or a status the endpoint documents
+   * as transient is retried after a backoff, up to the configured attempt count;
+   * a `retry-after` the endpoint sent is honored inside `maxRetryDelayMs`. A
+   * cancellation is never retried.
    *
-   * @param request — the state to evaluate and the questions to ask about it.
-   * @returns the vendor's result: the model id that answered, one answer per
-   * question id, and the usage record when the vendor sent one.
-   * @throws {JevError} `request` when the call is malformed (nothing was sent),
-   * `http`, `transport`, `timeout` or `protocol` when it failed, or `cancelled`
-   * when `request.signal` fired. No failure yields an answer.
+   * @throws {JevError} `request` when the call is malformed or cannot be
+   * serialized (nothing was sent), `http`, `transport`, `timeout` or `protocol`
+   * when it failed, or `cancelled` when `request.signal` fired.
    */
   async decide(request: JevRequest): Promise<JevResult> {
-    const body = buildWireBody(request, this.resolved.model)
+    const wire = buildWireBody(request, this.resolved.model)
+    const body = serializeWireBody(wire)
     const headers = {
       authorization: `Bearer ${this.resolved.apiKey}`,
       'content-type': 'application/json',
@@ -222,7 +195,7 @@ export class Jev extends Service {
     }
 
     for (let attempt = 1; ; attempt += 1) {
-      const outcome = await this.send(body, headers, request.signal)
+      const outcome = await this.send(body, wire.questions, headers, request.signal)
       if (outcome.ok) return outcome.result
       if (!isRetryable(outcome.error) || attempt >= this.resolved.attempts) throw outcome.error
 
@@ -236,15 +209,6 @@ export class Jev extends Service {
     }
   }
 
-  /**
-   * How long to wait before the next attempt, or `undefined` when waiting is
-   * pointless.
-   *
-   * A `retry-after` from the endpoint outranks this service's own backoff:
-   * trying again earlier than it asked would only collect another rejection.
-   * It does not outrank `maxRetryDelayMs`, which is the longest a caller agreed
-   * to wait — a longer one stops the call instead of blocking past the bound.
-   */
   private nextDelay(attempt: number, retryAfterMs: number | undefined): number | undefined {
     const backoff = Math.min(this.resolved.maxRetryDelayMs, this.resolved.retryDelayMs * 2 ** (attempt - 1))
     if (retryAfterMs === undefined) return backoff
@@ -252,16 +216,9 @@ export class Jev extends Service {
     return Math.max(backoff, retryAfterMs)
   }
 
-  /**
-   * Send one attempt: compose the caller's cancellation with this attempt's own
-   * timeout, then classify what came back.
-   *
-   * Classification is by this service's own flags rather than by the abort
-   * reason, so a cancellation is never mistaken for a timeout: the two differ in
-   * whether another attempt may happen at all.
-   */
   private async send(
-    body: JevWireBody,
+    body: string,
+    questions: Readonly<Record<string, JevWireQuestion>>,
     headers: Readonly<Record<string, string>>,
     signal: AbortSignal | undefined,
   ): Promise<JevAttempt> {
@@ -284,7 +241,7 @@ export class Jev extends Service {
       response = await this.resolved.transport({
         url: this.resolved.url,
         headers,
-        body: JSON.stringify(body),
+        body,
         signal: controller.signal,
       })
     } catch (error: unknown) {
@@ -302,16 +259,13 @@ export class Jev extends Service {
     }
 
     try {
-      return { ok: true, result: parseResponse(response.body, body.questions, text => this.redacted(text)) }
+      return { ok: true, result: parseResponse(response.body, questions, text => this.redacted(text)) }
     } catch (error: unknown) {
-      // Only this package's own failures are classified here; anything else is a
-      // bug in the parser and must not be reported as a vendor problem.
       if (!(error instanceof JevError)) throw error
       return { ok: false, error, retryAfterMs: undefined }
     }
   }
 
-  /** Name what went wrong on an attempt that never produced a response. */
   private transportFailure(error: unknown, cancelled: boolean, timedOut: boolean): JevError {
     if (cancelled) return new JevError('cancelled', 'the call was cancelled', { cause: error })
     if (timedOut) {
@@ -320,22 +274,17 @@ export class Jev extends Service {
     return new JevError('transport', `the request failed: ${this.redacted(errorText(error))}`, { cause: error })
   }
 
-  /** Redact the key from any text this service puts into a message or a log. */
   private redacted(text: string): string {
     return redact(text, [this.resolved.apiKey])
   }
 }
 
-/** Whether another attempt could succeed. A cancellation is a decision, not a failure to retry. */
 function isRetryable(error: JevError): boolean {
   switch (error.kind) {
     case 'transport':
     case 'timeout':
       return true
     case 'http':
-      // 408 and 429 are the endpoint asking for another attempt; 5xx is the
-      // endpoint failing at its own job. Every other status is this caller's
-      // mistake, and repeating it would only repeat the rejection.
       return error.status !== undefined && (error.status === 408 || error.status === 429 || error.status >= 500)
     case 'config':
     case 'request':
@@ -345,18 +294,6 @@ function isRetryable(error: JevError): boolean {
   }
 }
 
-/**
- * The wait the endpoint asked for, in milliseconds.
- *
- * Both documented forms are accepted — a whole number of seconds, or an HTTP
- * date — and an absent or unreadable header yields `undefined`, because a header
- * this package cannot parse is no reason to drop a call that could still
- * succeed.
- *
- * @param value — the `retry-after` header, whose name the transport lowercased.
- * @param now — the current epoch time in milliseconds, passed in so the date form is testable.
- * @returns the wait, or `undefined` when the header says nothing usable.
- */
 function parseRetryAfter(value: string | undefined, now: number): number | undefined {
   if (value === undefined) return undefined
   const trimmed = value.trim()
@@ -366,13 +303,6 @@ function parseRetryAfter(value: string | undefined, now: number): number | undef
   return Math.max(0, date - now)
 }
 
-/**
- * Wait out one backoff, unless the caller cancels first.
- *
- * The timer is local rather than `ctx.timeout`: that helper belongs to a timer
- * plugin this package does not declare, and a provider that reaches for a
- * service it never declared is not installable on its own.
- */
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   if (signal === undefined) return new Promise(resolve => { setTimeout(resolve, ms) })
   const abortSignal = signal

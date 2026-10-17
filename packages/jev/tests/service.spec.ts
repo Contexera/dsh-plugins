@@ -102,6 +102,19 @@ describe('Jev.decide', () => {
     expect(error.message).toContain('the request failed: ECONNREFUSED')
   })
 
+  it('reports an unserializable argument as a request failure, without sending or retrying', async () => {
+    const stub = stubTransport(() => vendorAnswer({ type: 'noul', noul: 0.9 }))
+    const ctx = await mount({ transport: stub.transport, attempts: 3, retryDelayMs: 1 })
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+
+    const error = await rejection(ctx.jev.decide({ ...REQUEST, state: circular }))
+
+    expect(error.kind).toBe('request')
+    expect(error.message).toContain('cannot be serialized as JSON')
+    expect(stub.count()).toBe(0)
+  })
+
   it('redacts the key from a message a transport failure carries back', async () => {
     const stub = stubTransport(() => { throw new Error('refused a request with Bearer test-key') })
     const ctx = await mount({ transport: stub.transport, attempts: 1 })

@@ -52,7 +52,6 @@ describe('the plugin configuration schema', () => {
 
   it('rejects a value the service would refuse, at the row rather than at the first call', () => {
     expect(() => Config({ attempts: -1 })).toThrow()
-    // A configuration file is untyped at runtime, so a wrong type reaches here as a string.
     expect(() => Config({ timeoutMs: 'soon' as never })).toThrow()
   })
 })

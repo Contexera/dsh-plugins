@@ -1,13 +1,8 @@
 /**
  * The one HTTP seam this package has, and the default implementation of it.
- *
- * The transport is an injected function rather than a `fetch` call inside the
- * service for one reason: every test in this package drives a stub and runs
- * offline, in milliseconds, with no key and no network.
  * @module @contexera/dsh-jev/transport
  */
 
-/** One attempt, fully resolved: where to send it, what to send, and how to cancel it. */
 export interface JevTransportRequest {
   /** The absolute endpoint URL. */
   readonly url: string
@@ -23,18 +18,10 @@ export interface JevTransportRequest {
   readonly signal: AbortSignal
 }
 
-/**
- * One attempt's raw outcome. The body is returned as text, not parsed, so the
- * service owns every judgement made about it: whether the status is worth
- * retrying, whether the payload is the documented response, and what a caller
- * is told when it is not.
- */
 export interface JevTransportResponse {
-  /** The HTTP status. */
   readonly status: number
   /** Response headers, lowercased, so a lookup does not depend on the wire's casing. */
   readonly headers: Readonly<Record<string, string>>
-  /** The response body as text. */
   readonly body: string
 }
 
@@ -45,7 +32,6 @@ export interface JevTransportResponse {
  */
 export type JevTransport = (request: JevTransportRequest) => Promise<JevTransportResponse>
 
-/** The default transport: the platform's `fetch`. */
 export const fetchTransport: JevTransport = async (request) => {
   const response = await fetch(request.url, {
     method: 'POST',
