@@ -14,6 +14,7 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "check:peers": "node scripts/check-dsh-peers.mjs",
+    "check:comments": "node scripts/check-comments.mjs",
     "check:pack": "node scripts/check-pack-contents.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
