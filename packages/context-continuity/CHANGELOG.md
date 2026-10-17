@@ -1,5 +1,69 @@
 # @contexera/dsh-context-continuity
 
+## 0.4.2
+
+### Patch Changes
+
+- [中文](#cn-v0-4-2) | [English](#en-v0-4-2)
+
+  <h3 id="cn-v0-4-2">中文</h3>
+
+  适配 DeepSeek Harness `0.2.1-rc.2`。
+
+  **改了什么**
+
+  - 九个 `@deepseek-ai/dsh-*` peer 区间移到 `>=0.2.1-rc.2 <0.2.2`，测试树同步钉到该版本。
+  - `zod` 钉到 `4.4.3`：`0.2.1-rc.2` 精确声明这个版本，区间写法会解析出第二份 zod，`exactOptionalPropertyTypes` 下 `stateSchema` 与宿主的类型对不上。
+  - 上下文成本无法测量时如实报告为不可测：`ContextTimelineItem.retainedTokens` 与 `discardedTokens` 改为可选，不再渲染成 `retained ~0, discarded ~0`。
+  - 常驻提示的失效判断要求 `compaction/end` 确实成功，并承认 `compaction/prune`：工具结果被剪枝时表面节点已被替换，但不会写压缩事件。
+  - 长间隔门不再把本轮中途到达的输入当作空闲：`idleMsFor` 同时看最新的 `step/start`，正在进行的工作不再被判为「距上次回合结束 45 分钟」而被翻页。
+  - checkpoint 锚点不再报「无受影响主题」：候选清单曾是硬编码的空列表。
+  - `context_status` 的 `limit` 文档改为与实际一致（浮到 1，无上限）。
+
+  **兼容性**
+
+  - DSH peer 区间：`>=0.2.1-rc.2 <0.2.2`，测试树钉 `0.2.1-rc.2`。
+  - 上一行 `>=0.2.0-rc.1 <0.2.1` 不再接收；仍停在 `0.2.0-rc.2` 的宿主需要先升级 DSH。
+  - `ContextTimelineItem.retainedTokens` / `discardedTokens` 由必填改为可选，是类型层面的变更。
+  - `@contexera/dsh-jev` 随之到 `0.1.4`。
+
+  **验证**
+
+  - 本地 `check:peers` / `-r typecheck` / `-r test` / `-r build` 全绿（engine 349、gateway 106、jev 82），`pnpm install --frozen-lockfile` 可复现。
+
+  ```sh
+  npm i @contexera/dsh-context-continuity@0.4.2
+  ```
+
+  <h3 id="en-v0-4-2">English</h3>
+
+  Adapts to DeepSeek Harness `0.2.1-rc.2`.
+
+  **What changed**
+
+  - The nine `@deepseek-ai/dsh-*` peers move to `>=0.2.1-rc.2 <0.2.2`, and the test tree pins that version.
+  - `zod` pins to `4.4.3`: `0.2.1-rc.2` declares it exactly, and a range resolves a second copy, which leaves `stateSchema` and the host's type disagreeing under `exactOptionalPropertyTypes`.
+  - An unmeasurable context cost is reported as unknown: `ContextTimelineItem.retainedTokens` and `discardedTokens` are optional and omitted from the render instead of reading `retained ~0, discarded ~0`.
+  - The standing notice's staleness latch requires `compaction/end` to have succeeded, and honours `compaction/prune`: a pruned tool result replaces surface nodes without writing a compaction event.
+  - The long-gap gate stops treating input that arrived mid-turn as idle: `idleMsFor` also reads the newest `step/start`, so work in progress is not measured as a 45-minute absence and rolled over.
+  - A checkpoint anchor no longer reports no affected topics: the candidate list was a hardcoded empty array.
+  - `context_status`'s `limit` documentation now matches the clamp (floored at 1, no upper bound).
+
+  **Compatibility**
+
+  - DSH peer range: `>=0.2.1-rc.2 <0.2.2`, test tree pinned to `0.2.1-rc.2`.
+  - The previous line `>=0.2.0-rc.1 <0.2.1` is no longer admitted; a host still on `0.2.0-rc.2` must upgrade DSH first.
+  - `ContextTimelineItem.retainedTokens` and `discardedTokens` become optional, which is a type-level change.
+  - `@contexera/dsh-jev` moves to `0.1.4` alongside it.
+
+  **Verification**
+
+  - Locally `check:peers` / `-r typecheck` / `-r test` / `-r build` all pass (engine 349, gateway 106, jev 82), and `pnpm install --frozen-lockfile` reproduces the tree.
+
+  ```sh
+  npm i @contexera/dsh-context-continuity@0.4.2
+  ```
+
 ## 0.4.1
 
 ### Patch Changes
